@@ -1,0 +1,19 @@
+UNITED STATES
+SECURITIES AND EXCHANGE COMMISSION
+Form 10-K
+For the fiscal year ended December 31, 2023
+NORTHWIND DEVICES INC.
+
+TABLE OF CONTENTS
+ITEM 1A. RISK FACTORS  4
+ITEM 7. MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS  6
+ITEM 8. FINANCIAL STATEMENTS  10
+
+ITEM 1A. RISK FACTORS
+We face geopolitical risk. Tariffs, sanctions, export controls, and an entity list designation may disrupt the supply chain. A trade war, decoupling pressure, and regional conflict remain risk factors in this risk section.
+
+ITEM 7. MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS
+Revenue increased, but an inventory impairment and a demand disruption weakened results. Profitability improved in the service segment, while the hardware segment reported a loss. We invested in artificial intelligence, machine learning, and cloud computing as part of a broader digital transformation. Climate risk and greenhouse gas compliance costs rose. Geopolitical risk is discussed under risk factors.
+
+ITEM 8. FINANCIAL STATEMENTS AND SUPPLEMENTARY DATA
+The consolidated balance sheet is omitted from this synthetic filing and must not enter the MD&A.

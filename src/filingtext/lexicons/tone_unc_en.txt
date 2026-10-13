@@ -1,0 +1,16 @@
+# Starter uncertainty list, aligned with the LM idea that "risk" is uncertainty.
+uncertainty
+uncertain
+risk
+risks
+risky
+approximately
+assume
+assumed
+assumption
+fluctuation
+volatile
+volatility
+pending
+contingent
+unpredictable

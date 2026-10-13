@@ -1,0 +1,26 @@
+# Starter negative list. Risk is uncertainty, not negative. Litigation is in the litigious list.
+adverse
+adversely
+decline
+declined
+default
+defaults
+fail
+failed
+failure
+impair
+impaired
+impairment
+loss
+losses
+penalty
+penalties
+weak
+weaker
+weakness
+downturn
+recession
+shortage
+disruption
+discontinued
+pressure

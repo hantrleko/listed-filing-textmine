@@ -1,0 +1,34 @@
+# Seed lexicon: digital adoption and AI.
+artificial intelligence
+machine learning
+deep learning
+neural network
+large language model
+generative ai
+natural language processing
+computer vision
+algorithm
+big data
+cloud computing
+cloud service
+cloud platform
+edge computing
+digital transformation
+digitalization
+digitization
+industrial internet
+internet of things
+blockchain
+robotics
+robot
+automation
+data platform
+data governance
+data mining
+business intelligence
+information system
+digital twin
+ai adoption
+computing power
+erp
+aigc

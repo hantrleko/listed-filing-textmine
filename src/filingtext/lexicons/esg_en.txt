@@ -1,0 +1,34 @@
+# Seed lexicon: climate, environment, ESG. One term per line.
+climate
+climate change
+climate risk
+carbon
+carbon emission
+carbon emissions
+carbon neutral
+carbon neutrality
+net zero
+greenhouse gas
+greenhouse gases
+emission intensity
+renewable energy
+clean energy
+energy efficiency
+energy saving
+pollution
+environmental
+sustainability
+sustainable
+esg
+biodiversity
+circular economy
+green bond
+green finance
+transition risk
+decarbonization
+decarbonisation
+scope 1
+scope 2
+scope 3
+waste
+emissions

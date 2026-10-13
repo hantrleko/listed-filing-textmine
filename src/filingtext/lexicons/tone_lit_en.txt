@@ -1,0 +1,15 @@
+# Starter litigious list.
+lawsuit
+lawsuits
+plaintiff
+defendant
+litigation
+arbitration
+regulatory
+subpoena
+indictment
+settlement
+fiduciary
+court
+penalty
+penalties

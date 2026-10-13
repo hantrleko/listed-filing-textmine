@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "filingtext"
+version = "0.1.0"
+description = "A-share and SEC filing section parser and academic text-feature panel builder"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = [
+  "pdfplumber>=0.11",
+  "beautifulsoup4>=4.12",
+  "lxml>=5",
+  "jieba>=0.42",
+  "duckdb>=1.0",
+  "pandas>=2.0",
+  "pyarrow>=15",
+  "matplotlib>=3.8",
+  "streamlit>=1.32",
+  "wordcloud>=1.9",
+  "requests>=2.31",
+  "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+finbert = ["transformers>=4.40", "torch"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+filingtext = "filingtext.pipeline:main"
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.package-data]
+filingtext = ["lexicons/*.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "src"]
+addopts = "-q"

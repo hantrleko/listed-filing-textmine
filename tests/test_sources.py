@@ -7,7 +7,13 @@ from filingtext.sources import (
 )
 
 
-def test_annual_window_is_the_following_year():
+def test_exchange_and_source_date():
+    from filingtext.sources import exchange_for_code, filing_date_from_ms
+
+    assert exchange_for_code("600519") == "上交所"
+    assert exchange_for_code("000001") == "深交所"
+    assert exchange_for_code("AAPL", "US") == "SEC"
+    assert filing_date_from_ms(1711929600000).startswith("2024-")
     assert annual_announcement_window(2023, 2023) == "2024-01-01~2024-08-31"
 
 

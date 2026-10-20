@@ -16,7 +16,16 @@ import streamlit as st
 from filingtext.clean import CLEANING_RULES, normalize
 from filingtext.config import OUTPUT_DIR, WORKSPACE_OUT
 from filingtext.extract import extract_pdf, html_to_text
-from filingtext.features import EN_STOP, ZH_STOP, apply_corpus, disclosure_diff, highlight_spans, score_document, tokenize
+from filingtext.features import (
+    EN_STOP,
+    ZH_STOP,
+    apply_corpus,
+    disclosure_diff,
+    evidence_sentences,
+    highlight_spans,
+    score_document,
+    tokenize,
+)
 from filingtext.lexicon import DICTIONARY_VERSION, tone_lexicons, topic_lexicons
 from filingtext.parse_job import parse_text
 from filingtext.samples import SAMPLE_DOCS
@@ -44,12 +53,45 @@ LABELS = {
 }
 
 
+def _synthetic_banner() -> None:
+    st.markdown(
+        """
+        <div style="position:sticky;top:3.5rem;z-index:1000;background:#7f1d1d;color:#fff;
+        padding:10px 14px;border-radius:6px;font-weight:700;margin-bottom:12px;">
+        合成演示数据 · 不是任何真实公司的年报或监管申报 · 截图不能当作研究结果
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.sidebar.markdown("**当前是合成演示**")
+
+
+def _render_source(row: dict | None) -> None:
+    if not row or not row.get("source_url"):
+        return
+    pages = ""
+    if row.get("page_start"):
+        pages = f"第 {row['page_start']}–{row['page_end']} 页"
+    st.markdown(
+        f"**来源** {row.get('firm_name') or ''} {row.get('stkcd') or row.get('ticker') or ''} · "
+        f"{row.get('fiscal_year') or ''} 年{row.get('report_type') or ''} · "
+        f"公告日期 {row.get('filing_date') or '未知'} · {row.get('exchange') or ''} · {pages}"
+    )
+    st.markdown(f"[打开原始申报文件]({row['source_url']})")
+    st.caption(
+        f"抓取时间 {row.get('fetched_at') or '未知'} · 词典版本 {row.get('data_version') or DICTIONARY_VERSION} · "
+        f"章节 {row.get('section_header') or row.get('section') or ''}"
+    )
+
+
 def main() -> None:
     st.set_page_config(page_title="年报文本特征引擎", layout="wide")
     st.title("上市公司文本特征引擎")
     st.caption("章节切分、词典命中高亮、词云和面板时序。语气词是可编辑种子词，不是 Loughran-McDonald 官方全表。")
 
     mode = st.sidebar.radio("开始", ["样本案例", "我的面板"], horizontal=True)
+    if mode == "样本案例":
+        _synthetic_banner()
     market = "CN"
     form = "annual"
     sample_frame = None
@@ -131,8 +173,8 @@ def _case_frame(ticker: str) -> pd.DataFrame:
 
 
 def _render_case_intro(name: str, market: str, frame: pd.DataFrame, year: int, docs: list[dict]) -> None:
-    st.subheader(name)
-    st.caption("合成多年样本。词频是披露用词，不是经营表现。口径见「方法与诊断」。")
+    st.subheader(f"【合成演示】{name}")
+    st.caption("下面的公司和正文都是合成的。词频不是经营表现。口径见「方法与诊断」。")
     if frame is None or frame.empty:
         return
     show = frame.sort_values(["fiscal_year", "section"]).copy()
@@ -257,7 +299,9 @@ def _render_highlight(text, market, lang, section_name, selected, extra_terms, r
         "词频衡量的是披露用词强度，不是真实风险或 ESG 表现。"
         "某一类为 0，只表示词典版本 "
         f"{DICTIONARY_VERSION} 没有命中，不能据此说企业没有该类风险。"
+        "跨年漂移还可能来自模板或篇幅变化，不能直接读成风险升降。"
     )
+    _render_source(row)
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("章节", section_name)
     c2.metric("内容词", f"{scored['n_tokens']}")
@@ -269,12 +313,37 @@ def _render_highlight(text, market, lang, section_name, selected, extra_terms, r
     c7.metric("地缘词频/千词", _fmt(scored["geopol_per_k"]))
     if row and row.get("page_start"):
         st.caption(f"章节大约在第 {row['page_start']}–{row['page_end']} 页。页码和表格行已从分母里去掉。")
+    picks = st.columns(3)
+    choice = None
+    if picks[0].button("查看 ESG 用词段落", key=f"ev-esg-{section_name}"):
+        choice = "esg"
+    if picks[1].button("查看数智化用词段落", key=f"ev-digital-{section_name}"):
+        choice = "digital"
+    if picks[2].button("查看地缘用词段落", key=f"ev-geopol-{section_name}"):
+        choice = "geopol"
+    if choice:
+        st.session_state["focus_lex"] = choice
+    focus = st.session_state.get("focus_lex")
+    if focus:
+        _render_evidence(text, (row or {}).get("section_raw") or text, focus, lang)
     spans = highlight_spans(text, _groups(lang, selected, extra_terms), lang)
     st.caption("绿色是 ESG 用词，蓝色是数智化用词，橙色是地缘用词。高亮的是清洗后正文。")
     st.markdown(_html(text, spans), unsafe_allow_html=True)
     counts = Counter(label for _a, _b, label in spans)
     if counts:
         st.write({LABELS.get(key, key): int(value) for key, value in counts.items()})
+
+
+def _render_evidence(cleaned: str, raw: str, lexicon: str, lang: str) -> None:
+    terms = topic_lexicons()[lang].get(lexicon, [])
+    rows = evidence_sentences(cleaned, raw, terms, lang)
+    st.markdown(f"**{LABELS.get(lexicon, lexicon)} 的原文句子**")
+    if not rows:
+        st.info("当前词典在清洗后正文里没有命中。这只说明没有匹配到种子词。")
+        return
+    for item in rows:
+        page = f"第 {item['page']} 页 · " if item.get("page") else ""
+        st.write(f"{page}{item['sentence']}")
 
 
 def _render_clean_compare(row, market: str, section_name: str) -> None:
@@ -364,11 +433,29 @@ def _prior_workspace_text(row: dict) -> str:
 
 
 def _render_method(anchors: list[dict], parsed: list[dict]) -> None:
-    st.markdown(f"**词典版本** {DICTIONARY_VERSION}。这是种子词，不是 Loughran-McDonald 官方全表。")
+    st.markdown(f"**词典版本** {DICTIONARY_VERSION}。这是可编辑种子词，不是 Loughran-McDonald 官方全表。")
     st.markdown(
-        "中文用 jieba，并先把词典里的词加成固定词。英文按词边界匹配，长词优先，所以 loss 不会算进 losses。"
-        "每千词 = 命中次数 / 清洗后内容词数 × 1000。"
-        "中文 Fog 是类比式：0.4 ×（词数/句数 + 100 × 四字及以上词占比），不能和英文 Gunning Fog 直接比高低。"
+        "强度分母是清洗后的内容词数。页码行和表格行先删掉，不进入分词，也不进入分母和 Fog。"
+        "中文用 jieba，词典里的词会先加进去。同一词表内长词优先，所以「碳排放权」不会再拆出「碳排放」。"
+        "英文按词边界匹配，loss 不会算进 losses。"
+        "不同词表可以同时命中同一个词，高亮时只标更长的那一次。"
+    )
+    st.markdown(
+        "否定只看命中词前面约 4 个汉字，或英文前约 24 个字符里的 no / not / never。"
+        "「没有改善」计为消极，不再计为积极。更远的否定不会被识别。"
+    )
+    st.markdown(
+        "语气净值 = (积极词数 − 消极词数) / 内容词数。大于 0 表示积极词更多。"
+        "风险、不确定不进这个净值。"
+    )
+    st.markdown(
+        "章节没有切出来时 found 为 0，宽表里对应格子是空的，不能把空值当成强度 0。"
+        "正文变长或变短会同时改变分子和分母，每千词升降不一定是同一类话变多。"
+        "跨年漂移是用词分布的差异，模板句、目录残留或篇幅变化都会让它变大，不能直接解读为风险上升或下降。"
+    )
+    st.markdown(
+        "中文 Fog 是类比式：0.4 ×（词数/句数 + 100 × 四字及以上词占比）。"
+        "它不是英文 Gunning Fog，不能和英文 Fog 直接比高低。"
     )
     for rule in CLEANING_RULES:
         st.write(rule)

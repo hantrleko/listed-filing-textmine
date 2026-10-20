@@ -53,7 +53,7 @@ def to_frame(records: list[dict]) -> pd.DataFrame:
         "geopol_count",
     ]:
         frame[column] = pd.to_numeric(frame[column], errors="coerce")
-    for column in ("doc_id", "market", "ticker", "stkcd", "cik", "firm_name", "report_type", "form", "section", "source_path", "text_path", "text_sha1", "fog_method", "tone_method", "error"):
+    for column in ("doc_id", "market", "ticker", "stkcd", "cik", "firm_name", "report_type", "form", "section", "source_path", "text_path", "text_sha1", "filing_date", "source_url", "exchange", "fetched_at", "data_version", "fog_method", "tone_method", "error"):
         frame[column] = frame[column].fillna("").astype(str)
     return frame
 
@@ -84,7 +84,10 @@ def to_wide(frame: pd.DataFrame) -> pd.DataFrame:
         data["stkcd"] = ""
     data["stkcd"] = data["stkcd"].fillna("").astype(str)
     data["ticker"] = data["ticker"].fillna("").astype(str)
-    keys = ["market", "stkcd", "ticker", "firm_name", "fiscal_year", "report_type"]
+    for column in ("filing_date", "source_url", "exchange", "fetched_at", "firm_name", "report_type"):
+        if column not in data.columns:
+            data[column] = ""
+    keys = ["market", "stkcd", "ticker", "firm_name", "fiscal_year", "report_type", "filing_date", "source_url", "exchange", "fetched_at"]
     for column in keys:
         if column not in data.columns:
             data[column] = pd.NA

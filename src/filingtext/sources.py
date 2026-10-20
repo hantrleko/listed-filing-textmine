@@ -194,6 +194,11 @@ def download_cninfo(
                     "firm_name": name,
                     "fiscal_year": year,
                     "report_type": "annual",
+                    "filing_date": filing_date_from_ms(ann.get("announcementTime")),
+                    "source_url": cninfo_pdf_url(adjunct),
+                    "exchange": exchange_for_code(code, "CN"),
+                    "fetched_at": _now_iso(),
+                    "data_version": "",
                 },
             )
             time.sleep(0.5)
@@ -282,10 +287,43 @@ def download_edgar(
                     "firm_name": firm,
                     "fiscal_year": year,
                     "report_type": form,
+                    "filing_date": str(recent["filingDate"][idx] or ""),
+                    "source_url": file_url,
+                    "exchange": "SEC",
+                    "fetched_at": _now_iso(),
+                    "data_version": "",
                 },
             )
             time.sleep(0.25)
     return saved
+
+
+def exchange_for_code(code: str, market: str = "CN") -> str:
+    if market.upper() == "US":
+        return "SEC"
+    code = str(code).strip()
+    if code.startswith("6"):
+        return "上交所"
+    if code.startswith(("4", "8", "92")):
+        return "北交所"
+    return "深交所"
+
+
+def filing_date_from_ms(value: object) -> str:
+    if value is None or value == "":
+        return ""
+    try:
+        from datetime import datetime, timezone
+
+        return datetime.fromtimestamp(int(value) / 1000, tz=timezone.utc).date().isoformat()
+    except (TypeError, ValueError, OSError):
+        return ""
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
 def _year_from_title(title: str) -> int | None:
@@ -316,13 +354,26 @@ def _stream(session: requests.Session, url: str, dest: Path) -> None:
 
 
 def _append_manifest(out: Path, row: dict) -> None:
-    import csv
+    import pandas as pd
 
     path = out / "manifest.csv"
-    fields = ["path", "market", "ticker", "firm_name", "fiscal_year", "report_type"]
-    new_file = not path.exists()
-    with path.open("a", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields)
-        if new_file:
-            writer.writeheader()
-        writer.writerow(row)
+    fields = [
+        "path",
+        "market",
+        "ticker",
+        "firm_name",
+        "fiscal_year",
+        "report_type",
+        "filing_date",
+        "source_url",
+        "exchange",
+        "fetched_at",
+        "data_version",
+    ]
+    rows = []
+    if path.exists():
+        rows = pd.read_csv(path, dtype=str).fillna("").to_dict("records")
+    payload = {field: "" for field in fields}
+    payload.update({key: "" if value is None else str(value) for key, value in row.items() if key in fields})
+    rows.append(payload)
+    pd.DataFrame(rows, columns=fields).to_csv(path, index=False, encoding="utf-8-sig")

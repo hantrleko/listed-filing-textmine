@@ -10,6 +10,7 @@ from filingtext.clean import clean_body_report, normalize
 from filingtext.config import DEFAULT_SECTIONS
 from filingtext.extract import read_filing
 from filingtext.features import score_document
+from filingtext.lexicon import DICTIONARY_VERSION
 from filingtext.sections import CN_BARE_TITLES, split_sections
 
 log = logging.getLogger(__name__)
@@ -191,6 +192,11 @@ def _base_record(meta: dict, section: str, found: int, error: str) -> dict:
         "source_path": meta.get("path") or "",
         "text_path": "",
         "text_sha1": "",
+        "filing_date": meta.get("filing_date") or "",
+        "source_url": meta.get("source_url") or "",
+        "exchange": meta.get("exchange") or "",
+        "fetched_at": meta.get("fetched_at") or "",
+        "data_version": meta.get("data_version") or DICTIONARY_VERSION,
         "error": error,
     }
 

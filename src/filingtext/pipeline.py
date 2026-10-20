@@ -63,6 +63,11 @@ def collect_jobs(
                 "firm_name": info.get("firm_name") or None,
                 "fiscal_year": int(year) if year else None,
                 "report_type": info.get("report_type") or None,
+                "filing_date": info.get("filing_date") or "",
+                "source_url": info.get("source_url") or "",
+                "exchange": info.get("exchange") or "",
+                "fetched_at": info.get("fetched_at") or "",
+                "data_version": info.get("data_version") or "",
                 "sections": sections,
                 "tone_override": tone_override,
             }

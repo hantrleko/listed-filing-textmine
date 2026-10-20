@@ -350,8 +350,41 @@ def disclosure_diff(previous: str, current: str, market: str, limit: int = 6) ->
     }
 
 
+def evidence_sentences(cleaned: str, raw: str, terms: list[str], lang: str, limit: int = 6) -> list[dict]:
+    """把词典命中收成句子，并尽量标出原文里的页码。"""
+    spans = find_spans(cleaned, terms, lang)
+    if not spans:
+        return []
+    bounds = [0]
+    for match in re.finditer(r"[。！？!?\n]", cleaned):
+        bounds.append(match.end())
+    if bounds[-1] != len(cleaned):
+        bounds.append(len(cleaned))
+    rows = []
+    seen = set()
+    for start, end, term in spans:
+        left = max(item for item in bounds if item <= start)
+        right = min(item for item in bounds if item >= end)
+        sentence = cleaned[left:right].strip()
+        if not sentence or sentence in seen:
+            continue
+        seen.add(sentence)
+        rows.append({"sentence": sentence, "term": term, "page": _page_of_snippet(raw, sentence)})
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def _page_of_snippet(raw: str, sentence: str) -> int | None:
+    probe = sentence[:24]
+    index = raw.find(probe) if probe else -1
+    if index < 0:
+        return None
+    marks = list(re.finditer(r"\[\[PAGE:(\d+)\]\]", raw[:index]))
+    return int(marks[-1].group(1)) if marks else None
+
+
 def finbert_tone(text: str, model_name: str = "yiyanghkust/finbert-tone", max_chars: int = 8000) -> dict | None:
-    """分块调用 FinBERT-tone，返回正/负/中性概率均值。模型不可用时返回 None。"""
     try:
         from transformers import pipeline
     except ImportError:

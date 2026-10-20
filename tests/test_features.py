@@ -41,7 +41,15 @@ def test_chinese_digital_and_fog_method():
     assert high["fog_index"] > 0
 
 
-def test_page_number_and_table_stay_out_of_score():
+def test_evidence_sentence_keeps_page():
+    from filingtext.features import evidence_sentences
+
+    raw = "[[PAGE:12]]\n公司推进绿色转型，并披露温室气体。\n[[PAGE:13]]\n出口管制扰动供应链。\n"
+    cleaned = "公司推进绿色转型，并披露温室气体。\n出口管制扰动供应链。"
+    rows = evidence_sentences(cleaned, raw, ["绿色转型", "出口管制"], "zh")
+    by_term = {row["term"]: row for row in rows}
+    assert by_term["绿色转型"]["page"] == 12
+    assert by_term["出口管制"]["page"] == 13
     from filingtext.clean import clean_body_report
 
     raw = "[[PAGE:7]]\n7 / 143\n营业收入保持增长，盈利能力稳健，董事会认为经营正常。\n12.1 13.2 14.3 15.4 16.5\n[[PAGE:8]]\n公司推进绿色转型。\n"

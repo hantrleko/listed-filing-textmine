@@ -494,23 +494,45 @@ def _render_cloud(text: str, lang: str) -> None:
         st.info("没有足够的词。")
         return
     top = pd.DataFrame(counts.most_common(30), columns=["词", "次数"])
-    st.bar_chart(top.set_index("词"))
+    font = _font()
+    _barh(top, font)
     try:
         from wordcloud import WordCloud
-        import matplotlib.pyplot as plt
     except ImportError:
         st.dataframe(top, use_container_width=True)
         return
+    if lang == "zh" and font is None:
+        st.warning("没有找到中文字体，词云无法显示汉字。")
+        st.dataframe(top, use_container_width=True)
+        return
     cloud = WordCloud(
-        font_path=_font(),
+        font_path=font,
         width=980,
         height=420,
         background_color="white",
         collocations=False,
-    ).generate_from_frequencies(dict(counts))
-    fig, axis = plt.subplots(figsize=(10, 4.4))
-    axis.imshow(cloud, interpolation="bilinear")
-    axis.axis("off")
+        max_words=80,
+        min_font_size=14,
+    ).generate_from_frequencies({str(word): int(count) for word, count in counts.items()})
+    st.image(cloud.to_image(), use_container_width=True)
+
+
+def _barh(top: pd.DataFrame, font: str | None) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.font_manager import FontProperties
+
+    prop = FontProperties(fname=font) if font else None
+    fig, axis = plt.subplots(figsize=(10, 6))
+    plot = top.iloc[::-1]
+    axis.barh(plot["词"], plot["次数"], color="#1d4e89")
+    if prop is not None:
+        for label in axis.get_yticklabels():
+            label.set_fontproperties(prop)
+        axis.set_xlabel("次数", fontproperties=prop)
+    fig.tight_layout()
     st.pyplot(fig)
     plt.close(fig)
 
@@ -744,6 +766,9 @@ def _fmt(value) -> str:
 
 
 def _font() -> str | None:
+    bundled = Path(__file__).resolve().parent / "fonts" / "SourceHanSansCN-Regular.otf"
+    if bundled.exists():
+        return str(bundled)
     for path in (
         r"C:\Windows\Fonts\simhei.ttf",
         r"C:\Windows\Fonts\msyh.ttc",

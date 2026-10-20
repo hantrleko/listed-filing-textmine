@@ -59,7 +59,7 @@ def to_frame(records: list[dict]) -> pd.DataFrame:
         "geopol_per_char_k",
     ]:
         frame[column] = pd.to_numeric(frame[column], errors="coerce")
-    for column in ("doc_id", "market", "ticker", "stkcd", "cik", "firm_name", "report_type", "form", "section", "source_path", "text_path", "text_sha1", "filing_date", "source_url", "exchange", "fetched_at", "data_version", "fog_method", "tone_method", "error"):
+    for column in ("doc_id", "market", "ticker", "stkcd", "cik", "firm_name", "report_type", "form", "section", "source_path", "text_path", "raw_text_path", "clean_log_path", "text_sha1", "filing_date", "source_url", "exchange", "fetched_at", "data_version", "fog_method", "tone_method", "error"):
         frame[column] = frame[column].fillna("").astype(str)
     return frame
 

@@ -113,6 +113,24 @@ def test_us_header_and_body_on_one_line():
     assert "Balance sheet" not in mda
 
 
+def test_note_heading_does_not_replace_embedded_risk():
+    text = """第三节 管理层讨论与分析
+报告期内公司营业收入保持增长，盈利能力稳健，董事会认为经营正常。
+3.11 风险管理
+出口管制使部分跨境业务承压，相关风险需要持续跟踪并披露应对措施。
+第四节 公司治理
+治理结构稳定规范运作，这段不应进入管理层讨论正文内容。
+第五节 财务报告
+58. 风险管理
+金融资产的信用风险敞口和预期信用损失计量说明，这段是附注不是经营讨论。
+"""
+    sections = split_sections(text, "CN")
+    assert "出口管制" in sections["mda"].text
+    assert "出口管制" in sections["risk"].text
+    assert "信用风险敞口" not in sections["risk"].text
+    assert "治理结构稳定" not in sections["mda"].text
+
+
 def test_cn_risk_subsection_stays_inside_mda():
     text = """第三节 管理层讨论与分析
 报告期内公司营业收入保持增长，盈利能力稳健，环保投入继续提升，董事会认为经营正常。

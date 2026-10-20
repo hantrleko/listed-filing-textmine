@@ -30,6 +30,10 @@ CN_TITLES: list[tuple[str, int, str]] = [
     ("risk", 0, "公司面临的风险和应对措施"),
     ("risk", 1, "可能面对的风险"),
     ("risk", 2, "可能面临的风险"),
+    ("risk", 3, "面临的主要风险"),
+    ("risk", 3, "主要风险及应对"),
+    ("risk", 4, "风险管理"),
+    ("risk", 4, "风险因素"),
 ]
 
 US_10K_ITEMS = {
@@ -73,7 +77,7 @@ _CN_TOC = re.compile(
     r"^(?P<head>.*?)(?:[ \t]*[\.·．…]{2,}[ \t]*(?P<page>\d{1,4})|[ \t]{2,}(?P<page2>\d{1,4}))\s*$"
 )
 _CN_ENUM = re.compile(
-    r"^(?:第[一二三四五六七八九十百零〇0-9]{1,3}[章节]|[（(][一二三四五六七八九十]+[)）]、|[一二三四五六七八九十]+、|\d{1,2}[、.．]|\d{1,2}\s+)\s*"
+    r"^(?:第[一二三四五六七八九十百零〇0-9]{1,3}[章节]|[（(][一二三四五六七八九十]+[)）][、.．]?|[一二三四五六七八九十]+、|\d{1,2}(?:\.\d+)+\s*|\d{1,2}[、.．]|\d{1,2}\s+)\s*"
 )
 _CN_HARD = re.compile(r"第[一二三四五六七八九十百零〇0-9]{1,3}[章节]")
 _CN_NUMBERED = re.compile(r"^\d{1,2}\s+")
@@ -152,24 +156,44 @@ def find_anchors(text: str, market: str, form: str | None = None) -> list[Anchor
     raise ValueError(f"未知市场 {market}")
 
 
+def _best_anchor(group: list[Anchor], points: list[int]) -> Anchor:
+    def span(anchor: Anchor) -> int:
+        end = next((pos for pos in points if pos > anchor.start), 10**12)
+        return end - anchor.start
+
+    return sorted(group, key=lambda a: (a.priority, 0 if a.hard else 1, -span(a)))[0]
+
+
 def _choose(anchors: list[Anchor]) -> tuple[list[Anchor], list[int]]:
     body = [a for a in anchors if not a.toc]
     pool = body or anchors
     hard = [a for a in pool if a.hard]
     selection_points = sorted(a.start for a in (hard or pool))
-
-    def span(anchor: Anchor) -> int:
-        end = next((pos for pos in selection_points if pos > anchor.start), 10**12)
-        return end - anchor.start
-
     grouped: dict[str, list[Anchor]] = {}
     for anchor in pool:
         grouped.setdefault(anchor.section, []).append(anchor)
-    chosen: list[Anchor] = []
-    for group in grouped.values():
-        best = sorted(group, key=lambda a: (a.priority, 0 if a.hard else 1, -span(a)))[0]
-        chosen.append(best)
+    chosen = [
+        _best_anchor(group, selection_points)
+        for section, group in grouped.items()
+        if section != "risk"
+    ]
     slice_points = sorted(a.start for a in hard) if hard else sorted(a.start for a in chosen)
+    mda = next((anchor for anchor in chosen if anchor.section == "mda"), None)
+    mda_end = next((pos for pos in slice_points if mda and pos > mda.start), 10**12)
+    if "risk" in grouped:
+        group = grouped["risk"]
+        inside = [
+            anchor
+            for anchor in group
+            if mda and mda.content_start <= anchor.start < mda_end
+        ]
+        dedicated = [anchor for anchor in inside if anchor.priority <= 2]
+        outside_dedicated = [anchor for anchor in group if anchor.priority <= 2 and anchor not in inside]
+        picked = _best_anchor(dedicated or inside or outside_dedicated or group, selection_points)
+        chosen.append(picked)
+        embedded = bool(mda and mda.content_start <= picked.start < mda_end and not picked.hard)
+        if not embedded and not hard:
+            slice_points = sorted([*slice_points, picked.start])
     return chosen, slice_points
 
 

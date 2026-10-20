@@ -45,6 +45,8 @@ PANEL_COLUMNS = [
     "is_duplicate",
     "source_path",
     "text_path",
+    "raw_text_path",
+    "clean_log_path",
     "text_sha1",
     "filing_date",
     "source_url",

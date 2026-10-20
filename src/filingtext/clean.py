@@ -24,8 +24,8 @@ _NOISE = [
 ]
 
 CLEANING_RULES = [
-    "页码行（如 7 / 143、第 7 页、Page 3 of 20）整行删除，不进入分词、词频分母和 Fog。",
-    "数字占比高或一行里有至少 4 个数字的表格残行删除，同样不进入分词、分母和 Fog。",
+    "页码行（如 7 / 143、第 7 页）整行删除，不进入分词、词频分母和 Fog。",
+    "一行里有两列以上括号数字，或汉字很少却夹着数字的残句，按表格碎片删除。删除记录为 0 表示这些规则没有删行，不表示正文里一定没有表格。",
     "跨页重复的短页眉页脚删除。章节标题行保留，用来切边界。",
     "PDF 顶栏 6% 和底栏 6% 在抽字时丢掉。抽字后插入 [[PAGE:n]]，计分前再拿掉，只用来记录章节落在哪些页。",
     "指标只对清洗后的章节正文计算。原文留作对照，不参与词频。",
@@ -64,6 +64,12 @@ def noise_reason(line: str) -> str | None:
         return "页码"
     if any(p.search(s) for p in _NOISE) and len(s) <= 40:
         return "页眉页脚或空行"
+    paren_numbers = re.findall(r"\(\s*-?\d[\d,]*\s*\)", s)
+    cjk = len(re.findall(r"[\u4e00-\u9fff]", s))
+    if len(paren_numbers) >= 2 and cjk <= 24:
+        return "表格行"
+    if cjk <= 2 and re.search(r"\d", s) and len(s) <= 16:
+        return "残句"
     if is_table_noise(s):
         return "表格行"
     return None
@@ -103,14 +109,12 @@ def drop_repeated_lines(text: str, min_repeat: int = 4, max_len: int = 60) -> st
             continue
         if key and freq[key] >= min_repeat and len(key) <= max_len and not _looks_like_header(ln):
             continue
-        if ln.strip() and is_noise_line(ln):
-            continue
         kept.append(ln.rstrip())
     return "\n".join(kept).strip()
 
 
 def drop_repeated_pages(pages: list[list[str]], rate: float = 0.4) -> str:
-    """去掉跨页重复的短行（页眉页脚），并丢掉表格噪点。"""
+    """去掉跨页重复的短页眉页脚。页码和表格留到 clean_body_report，以便逐行记录删除原因。"""
     n = len(pages)
     freq: Counter[str] = Counter()
     for lines in pages:
@@ -130,8 +134,6 @@ def drop_repeated_pages(pages: list[list[str]], rate: float = 0.4) -> str:
                 and len(key) <= 60
                 and not _looks_like_header(ln)
             ):
-                continue
-            if ln.strip() and is_noise_line(ln):
                 continue
             if ln.strip():
                 kept.append(ln.strip())
@@ -172,14 +174,12 @@ def clean_body_report(text: str, skip_lines: set[str] | None = None) -> tuple[st
             continue
         if line in skip:
             dropped_n += 1
-            if len(drops) < 40:
-                drops.append({"page": page, "reason": "章节标题行", "line": line[:120]})
+            drops.append({"page": page, "reason": "章节标题行", "line": line[:120]})
             continue
         reason = noise_reason(line)
         if reason:
             dropped_n += 1
-            if len(drops) < 40:
-                drops.append({"page": page, "reason": reason, "line": line[:120]})
+            drops.append({"page": page, "reason": reason, "line": line[:120]})
             continue
         if first_page is None:
             first_page = page

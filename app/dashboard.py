@@ -113,7 +113,7 @@ def main() -> None:
         sample_frame = _case_frame(ticker)
     else:
         panel_dir = WORKSPACE_OUT
-        raw, market, form = _workspace_page()
+        raw, market, form, source_meta = _workspace_page()
 
     lang = "zh" if market == "CN" else "en"
     selected = st.sidebar.multiselect(
@@ -126,7 +126,8 @@ def main() -> None:
 
     if mode == "样本案例":
         _render_case_intro(sample_name, market, sample_frame, int(year), docs)
-    view, section_name, anchors, parsed, row = _prepare(raw, market, form)
+        source_meta = {}
+    view, section_name, anchors, parsed, row = _prepare(raw, market, form, source_meta)
 
     tabs = st.tabs(["原文与清洗", "词云", "方法与诊断", "面板时序"])
     with tabs[0]:
@@ -237,7 +238,7 @@ def _source_text() -> str:
     return ""
 
 
-def _prepare(raw: str, market: str, form: str):
+def _prepare(raw: str, market: str, form: str, source_meta: dict | None = None):
     if not raw:
         return "", "", [], [], None
     form_arg = None if market == "CN" else form
@@ -245,15 +246,14 @@ def _prepare(raw: str, market: str, form: str):
     names = ["全文"] + list(sections)
     default_index = names.index("mda") if "mda" in names else 0
     choice = st.selectbox("查看范围", names, index=default_index)
-    parsed = parse_text(
-        raw,
-        {
-            "path": "upload.txt",
-            "market": market,
-            "report_type": form,
-            "sections": list(sections) or None,
-        },
-    )
+    meta = {
+        "path": "upload.txt",
+        "market": market,
+        "report_type": form,
+        "sections": list(sections) or None,
+    }
+    meta.update({key: value for key, value in (source_meta or {}).items() if value not in (None, "")})
+    parsed = parse_text(raw, meta)
     anchors = diagnose_anchors(raw, market, form=form_arg)
     if choice == "全文":
         return raw, "全文", anchors, parsed, None
@@ -318,7 +318,9 @@ def _render_highlight(text, market, lang, section_name, selected, extra_terms, r
         "每千词和每千字是两套分母，用来看结论会不会被篇幅算法带偏。"
     )
     if row and row.get("page_start"):
-        st.caption(f"章节大约在第 {row['page_start']}–{row['page_end']} 页。页码和表格行已从分母里去掉。")
+        st.caption(f"章节大约在第 {row['page_start']}–{row['page_end']} 页。页码是否进入分母，以删除记录为准。")
+    if row and not row.get("source_url"):
+        st.caption("当前没有公告原文链接。服务器上的 source_path 不能用来回查申报。")
     picks = st.columns(3)
     choice = None
     if picks[0].button("查看 ESG 用词段落", key=f"ev-esg-{section_name}"):
@@ -358,18 +360,32 @@ def _render_clean_compare(row, market: str, section_name: str) -> None:
     raw = row.get("section_raw") or ""
     cleaned = row.get("section_text") or ""
     left, right = st.columns(2)
-    left.markdown("**原文片段**")
+    left.markdown("**原始抽取预览**")
     left.text((raw or "没有切出这一章。")[:2500])
-    right.markdown("**清洗后，只对这份计分**")
+    right.markdown("**清洗后预览，只对这份计分**")
     right.text((cleaned or "清洗后不足 40 字，未计分。")[:2500])
+    dropped = int(row.get("n_dropped_lines") or 0)
     st.caption(
-        f"边界标题：{row.get('section_header') or '未识别'}。"
-        f"删除 {row.get('n_dropped_lines') or 0} 行。"
-        "页码和表格行不进入分词、每千词分母和 Fog。"
+        f"边界标题：{row.get('section_header') or '未识别'}。规则删除 {dropped} 行。"
+        "下面只预览前 2500 字。删除数为 0 表示规则没有删行，不表示正文里一定没有表格碎片。"
     )
     log = row.get("clean_log") or []
+    left_col, right_col = st.columns(2)
+    if raw:
+        left_col.download_button("下载本节原始抽取", raw.encode("utf-8"), file_name="section_raw.txt", key="dl-raw")
+    if cleaned:
+        right_col.download_button("下载清洗后正文", cleaned.encode("utf-8"), file_name="section_clean.txt", key="dl-clean")
     if log:
-        st.dataframe(pd.DataFrame(log), use_container_width=True, height=220)
+        st.download_button(
+            "下载逐行删除记录",
+            __import__("json").dumps(log, ensure_ascii=False, indent=2).encode("utf-8"),
+            file_name="clean_log.json",
+            key="dl-log",
+        )
+        preview = log[:40]
+        if len(log) > len(preview):
+            st.caption(f"删除记录共 {len(log)} 行，下面只显示前 40 行。完整记录在下载文件里。")
+        st.dataframe(pd.DataFrame(preview), use_container_width=True, height=220)
     prior = _prior_workspace_text(row)
     if prior:
         _show_diff(prior, cleaned, market, int(row["fiscal_year"]))
@@ -441,7 +457,7 @@ def _prior_workspace_text(row: dict) -> str:
 def _render_method(anchors: list[dict], parsed: list[dict]) -> None:
     st.markdown(f"**词典版本** {DICTIONARY_VERSION}。这是可编辑种子词，不是 Loughran-McDonald 官方全表。")
     st.markdown(
-        "强度分母是清洗后的内容词数。页码行和表格行先删掉，不进入分词，也不进入分母和 Fog。"
+        "强度分母是清洗后的内容词数。命中删除规则的页码行和表格行不进入分词、分母和 Fog。"
         "中文用 jieba，词典里的词会先加进去。同一词表内长词优先，所以「碳排放权」不会再拆出「碳排放」。"
         "英文按词边界匹配，loss 不会算进 losses。"
         "不同词表可以同时命中同一个词，高亮时只标更长的那一次。"
@@ -455,7 +471,9 @@ def _render_method(anchors: list[dict], parsed: list[dict]) -> None:
         "风险、不确定不进这个净值。"
     )
     st.markdown(
-        "章节没有切出来时 found 为 0，宽表里对应格子是空的，不能把空值当成强度 0。"
+        "章节没有切出来时 found 为 0，宽表里对应格子是空的，不能把空值当成强度 0，也不能当成没有风险披露。"
+        "risk 会再找 MD&A 里面的「风险管理」「风险因素」等小节；找不到只说明标题没对上。"
+        "「法律制裁」「制裁合规」「提升制裁风险防范」这类合规表述不计入地缘词；「经济制裁」「出口管制」仍计入。"
         "正文变长或变短会同时改变分子和分母，每千词升降不一定是同一类话变多。"
         "跨年漂移是用词分布的差异，模板句、目录残留或篇幅变化都会让它变大，不能直接解读为风险上升或下降。"
     )
@@ -537,7 +555,7 @@ def _barh(top: pd.DataFrame, font: str | None) -> None:
     plt.close(fig)
 
 
-def _workspace_page() -> tuple[str, str, str]:
+def _workspace_page() -> tuple[str, str, str, dict]:
     st.subheader("我的面板")
     st.caption("代码和年份会下载原文再解析。上传的文件会进入同一张表。样本案例的数字不会被这里改掉。单次最多下载 8 份。")
     action = st.radio("加入文件", ["按代码和年份抓取", "上传已有文件"], horizontal=True)
@@ -631,15 +649,15 @@ def _upload_form() -> None:
             st.error(str(exc))
 
 
-def _workspace_selection() -> tuple[str, str, str]:
+def _workspace_selection() -> tuple[str, str, str, dict]:
     parquet = WORKSPACE_OUT / "panel.parquet"
     if not parquet.exists():
-        return "", "CN", "annual"
+        return "", "CN", "annual", {}
     frame = pd.read_parquet(parquet)
     found = frame[frame["found"] == 1]
     if found.empty:
         st.warning("文件已经解析，但没有切出足够长的章节。可以到「章节诊断」查看标题是否被识别。")
-        return "", "CN", "annual"
+        return "", "CN", "annual", {}
     found = found.sort_values(["ticker", "fiscal_year", "section"])
     labels = [
         f"{row.ticker} {int(row.fiscal_year)} {row.section}"
@@ -653,7 +671,22 @@ def _workspace_selection() -> tuple[str, str, str]:
     else:
         saved = Path(str(row.get("text_path") or ""))
         text = saved.read_text(encoding="utf-8") if saved.exists() else ""
-    return text, str(row["market"]), str(row.get("form") or "annual")
+    year = row.get("fiscal_year")
+    meta = {
+        "path": str(source) if source.exists() else "upload.txt",
+        "market": str(row["market"]),
+        "ticker": str(row.get("ticker") or ""),
+        "firm_name": str(row.get("firm_name") or ""),
+        "fiscal_year": int(year) if pd.notna(year) else None,
+        "report_type": str(row.get("report_type") or ""),
+        "filing_date": str(row.get("filing_date") or ""),
+        "source_url": str(row.get("source_url") or ""),
+        "exchange": str(row.get("exchange") or ""),
+        "fetched_at": str(row.get("fetched_at") or ""),
+        "data_version": str(row.get("data_version") or ""),
+        "cik": str(row.get("cik") or ""),
+    }
+    return text, str(row["market"]), str(row.get("form") or "annual"), meta
 
 
 @st.cache_data(show_spinner=False)

@@ -2,7 +2,42 @@ from filingtext.parse_job import parse_filename, parse_text
 from filingtext.samples import SAMPLE_DOCS
 
 
-def test_filename_meta():
+def test_source_fields_survive_parse():
+    rows = parse_text(
+        "第三节 管理层讨论与分析\n报告期内公司营业收入保持增长，盈利能力稳健，董事会认为经营正常。\n第四节 公司治理\n治理结构稳定规范运作，这段不应进入管理层讨论。\n",
+        {
+            "path": "600519_2023_annual.pdf",
+            "market": "CN",
+            "ticker": "600519",
+            "firm_name": "贵州茅台",
+            "fiscal_year": 2023,
+            "filing_date": "2024-04-02",
+            "source_url": "https://static.cninfo.com.cn/finalpage/a.PDF",
+            "exchange": "上交所",
+            "fetched_at": "2026-10-20T00:00:00+00:00",
+            "sections": ["mda"],
+        },
+    )
+    assert rows[0]["source_url"].startswith("https://static.cninfo.com.cn/")
+    assert rows[0]["filing_date"] == "2024-04-02"
+    assert rows[0]["exchange"] == "上交所"
+    assert rows[0]["fetched_at"]
+
+
+def test_table_fragments_are_logged_and_removed():
+    from filingtext.clean import clean_body_report
+
+    raw = "营业收入保持增长，盈利能力稳健，董事会认为经营正常。\n其他资产减值损失 (191) (815)\n长8.22%\n公司继续经营。\n"
+    cleaned, drops, meta = clean_body_report(raw)
+    assert "(191)" not in cleaned
+    assert "长8.22%" not in cleaned
+    assert "营业收入保持增长" in cleaned
+    assert "同比增长 8.22%，盈利能力稳健" in clean_body_report(
+        "营业收入同比增长 8.22%，盈利能力稳健，董事会认为经营正常。\n"
+    )[0]
+    assert meta["n_dropped_lines"] >= 2
+    assert any(item["reason"] == "表格行" for item in drops)
+    assert any(item["reason"] == "残句" for item in drops)
     from pathlib import Path
 
     meta = parse_filename(Path("000001_2023_annual.pdf"))

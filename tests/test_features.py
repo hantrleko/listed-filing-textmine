@@ -75,6 +75,55 @@ def test_disclosure_diff_lists_new_sentence():
     assert any(item["term"] == "人工智能" and item["change"] > 0 for item in diff["topic_changes"])
 
 
+def test_legal_sanction_is_not_geopolitical():
+    labels = [
+        ("公司经营可能面临法律制裁，需要加强合规管理。", 0),
+        ("持续强化制裁合规管理，并完善反洗钱流程。", 0),
+        ("提升制裁风险防范能力。", 0),
+        ("推进合规文化建设，提升制裁和洗钱风险管理。", 0),
+        ("美国对相关实体实施经济制裁，出口管制压力上升。", 2),
+        ("出口管制与制裁压力加大。", 2),
+    ]
+    for text, minimum in labels:
+        score = score_document(text, "CN")
+        if minimum == 0:
+            assert score["geopol_count"] == 0, text
+        else:
+            assert score["geopol_count"] >= minimum, text
+
+
+def test_embedded_risk_subsection():
+    from filingtext.sections import split_sections
+
+    text = """第三节 管理层讨论与分析
+报告期内公司营业收入保持增长，盈利能力稳健，董事会认为经营正常。
+3.2 风险管理
+出口管制和关税使部分业务承压，相关风险需要持续跟踪并披露应对措施。
+第四节 公司治理
+治理结构稳定规范运作，这段不应进入管理层讨论正文内容。
+"""
+    sections = split_sections(text, "CN")
+    assert "出口管制" in sections["mda"].text
+    assert "出口管制" in sections["risk"].text
+    assert "治理结构稳定" not in sections["risk"].text
+
+
+def test_parenthetical_risk_heading():
+    from filingtext.sections import split_sections
+
+    text = """第三节 管理层讨论与分析
+报告期内公司营业收入保持增长，盈利能力稳健，董事会认为经营正常。
+（二）面临的主要风险
+汇率和关税变化使部分业务承压，相关风险需要持续跟踪并披露应对措施。
+第四节 公司治理
+治理结构稳定规范运作，这段不应进入风险小节。
+"""
+    sections = split_sections(text, "CN")
+    assert "汇率和关税" in sections["risk"].text
+    assert "治理结构稳定" not in sections["risk"].text
+    assert "汇率和关税" in sections["mda"].text
+
+
 def test_negation_flips_positive_word():
     plain = score_document("公司实现改善，盈利能力稳健。", "CN")
     negated = score_document("公司没有改善，盈利能力稳健。", "CN")

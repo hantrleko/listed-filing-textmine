@@ -157,6 +157,28 @@ def _tone_counts(text: str, tones: dict[str, list[str]], lang: str) -> dict[str,
     }
 
 
+def _blocked_geopol(text: str, start: int, term: str) -> bool:
+    """合规语境里的「法律制裁」「制裁合规」「提升制裁风险防范」不计入地缘风险。"""
+    if term != "制裁":
+        return False
+    end = start + len(term)
+    prefix = text[max(0, start - 8) : end]
+    if re.search(r"(法律|纪律|内部|行政|合规|刑事)制裁", prefix):
+        return True
+    if text[end : end + 2] == "合规":
+        return True
+    return text[max(0, start - 2) : start] in {"强化", "提升", "加强", "完善"}
+
+
+def _count_geopol(text: str, terms: list[str], lang: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for start, _end, term in find_spans(text, terms, lang):
+        if _blocked_geopol(text, start, term):
+            continue
+        counts[term] = counts.get(term, 0) + 1
+    return counts
+
+
 def _per_k(count: int, n_tokens: int) -> float | None:
     if n_tokens <= 0:
         return None
@@ -187,7 +209,10 @@ def score_document(
     }
     metrics.update(readability(text, tokens, lang))
     for name in ("esg", "digital", "geopol"):
-        hits = count_terms(text, topics[name], lang)
+        if name == "geopol":
+            hits = _count_geopol(text, topics[name], lang)
+        else:
+            hits = count_terms(text, topics[name], lang)
         term_hits[name] = hits
         total = sum(hits.values())
         metrics[f"{name}_count"] = total

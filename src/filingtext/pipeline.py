@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import logging
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -39,6 +40,7 @@ def collect_jobs(
             if not path.is_absolute():
                 path = root / path
             meta[str(path.resolve())] = row
+    by_name = {Path(key).name: row for key, row in meta.items()}
     discovered = [p.resolve() for p in root.rglob("*") if p.is_file() and p.suffix.lower() in TEXT_SUFFIXES]
     if meta:
         known = {Path(p).resolve() for p in meta}
@@ -52,7 +54,7 @@ def collect_jobs(
         paths = discovered
     jobs = []
     for path in paths:
-        info = meta.get(str(path.resolve()), {})
+        info = meta.get(str(path.resolve()), {}) or by_name.get(path.name, {})
         hint = (info.get("market") or market or "").upper()
         year = info.get("fiscal_year") or None
         jobs.append(
@@ -149,14 +151,33 @@ def _persist_text(records: list[dict], text_dir: Path = TEXT_DIR) -> None:
             row["doc_id"] = doc_id
         seen.add(doc_id)
     for row in records:
+        raw_body = row.pop("section_raw", "") or ""
+        clean_log = row.pop("clean_log", []) or []
         body = row.pop("section_text", "") or ""
+        row.pop("section_header", None)
         if not body or not row.get("found"):
             row["text_path"] = ""
+            row["raw_text_path"] = ""
+            row["clean_log_path"] = ""
             row["text_sha1"] = ""
+            if raw_body:
+                raw_dest = text_dir / f"{row['doc_id']}.raw.txt"
+                raw_dest.write_text(raw_body, encoding="utf-8")
+                row["raw_text_path"] = str(raw_dest)
+            if clean_log:
+                log_dest = text_dir / f"{row['doc_id']}.cleanlog.json"
+                log_dest.write_text(json.dumps(clean_log, ensure_ascii=False), encoding="utf-8")
+                row["clean_log_path"] = str(log_dest)
             continue
         dest = text_dir / f"{row['doc_id']}.txt"
         dest.write_text(body, encoding="utf-8")
+        raw_dest = text_dir / f"{row['doc_id']}.raw.txt"
+        raw_dest.write_text(raw_body, encoding="utf-8")
+        log_dest = text_dir / f"{row['doc_id']}.cleanlog.json"
+        log_dest.write_text(json.dumps(clean_log, ensure_ascii=False), encoding="utf-8")
         row["text_path"] = str(dest)
+        row["raw_text_path"] = str(raw_dest)
+        row["clean_log_path"] = str(log_dest)
         row["text_sha1"] = hashlib.sha1(body.encode("utf-8")).hexdigest()
 
 

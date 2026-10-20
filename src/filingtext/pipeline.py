@@ -83,16 +83,34 @@ def run(
     use_finbert: bool = False,
     limit: int = 0,
     text_dir: str | Path | None = None,
+    on_event=None,
 ) -> dict:
     tone_override = load_loughran_mcdonald(lm_path) if lm_path else None
     jobs = collect_jobs(input_dir, market=market, sections=sections, manifest=manifest, tone_override=tone_override, limit=limit)
     if not jobs:
         raise FileNotFoundError(f"没有可解析的 PDF/HTML/TXT：{input_dir}")
+    batches = []
     if workers <= 1:
-        batches = [parse_path(job) for job in jobs]
+        for job in jobs:
+            name = Path(job["path"]).name
+            if on_event:
+                on_event({"stage": "章节切分", "detail": name, "state": "run"})
+            try:
+                batch = parse_path(job)
+            except Exception as exc:
+                if on_event:
+                    on_event({"stage": "章节切分", "detail": f"{name}：{exc}", "state": "fail"})
+                continue
+            found = sum(1 for row in batch if row.get("found"))
+            if on_event:
+                state = "ok" if found else "fail"
+                on_event({"stage": "章节切分", "detail": f"{name}，有效章节 {found}", "state": state})
+            batches.append(batch)
     else:
         with ProcessPoolExecutor(max_workers=workers) as pool:
             batches = list(pool.map(parse_path, jobs))
+    if on_event:
+        on_event({"stage": "指标计算", "detail": "词频、TF-IDF 与同比", "state": "run"})
     records = [row for batch in batches for row in batch]
     if use_finbert:
         _attach_finbert(records)

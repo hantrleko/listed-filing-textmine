@@ -25,6 +25,7 @@ def build_from_codes(
     edgar_contact: str = "",
     forms: list[str] | None = None,
     max_filings: int = MAX_FILINGS,
+    on_event=None,
 ) -> dict:
     market = market.upper()
     chosen = parse_codes(codes)
@@ -41,7 +42,7 @@ def build_from_codes(
         )
     WORKSPACE_RAW.mkdir(parents=True, exist_ok=True)
     if market == "CN":
-        saved = download_cninfo(chosen, start, end, WORKSPACE_RAW)
+        saved = download_cninfo(chosen, start, end, WORKSPACE_RAW, on_event=on_event)
     else:
         contact = edgar_contact.strip()
         if "@" not in contact:
@@ -49,7 +50,7 @@ def build_from_codes(
         previous = os.environ.get("EDGAR_USER_AGENT")
         os.environ["EDGAR_USER_AGENT"] = f"filingtext-research {contact}"
         try:
-            saved = download_edgar(chosen, [], start, end, WORKSPACE_RAW, forms=form_list)
+            saved = download_edgar(chosen, [], start, end, WORKSPACE_RAW, forms=form_list, on_event=on_event)
         finally:
             if previous is None:
                 os.environ.pop("EDGAR_USER_AGENT", None)
@@ -57,8 +58,10 @@ def build_from_codes(
                 os.environ["EDGAR_USER_AGENT"] = previous
     if not saved:
         raise RuntimeError("没有下载到符合条件的年报或 10-K/10-Q。")
-    result = refresh_workspace()
+    result = refresh_workspace(on_event=on_event)
     result["downloaded"] = saved
+    if on_event:
+        on_event({"stage": "完成", "detail": f"下载 {len(saved)} 份", "state": "ok"})
     return result
 
 
@@ -69,10 +72,10 @@ def save_upload(filename: str, data: bytes) -> Path:
     return dest
 
 
-def refresh_workspace() -> dict:
+def refresh_workspace(on_event=None) -> dict:
     if not WORKSPACE_RAW.exists() or not any(WORKSPACE_RAW.iterdir()):
         raise FileNotFoundError("我的面板里还没有文件。")
-    return run(WORKSPACE_RAW, WORKSPACE_OUT, text_dir=WORKSPACE_TEXT)
+    return run(WORKSPACE_RAW, WORKSPACE_OUT, text_dir=WORKSPACE_TEXT, on_event=on_event)
 
 
 def reset_workspace() -> None:

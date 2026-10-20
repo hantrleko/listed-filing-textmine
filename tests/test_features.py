@@ -41,6 +41,32 @@ def test_chinese_digital_and_fog_method():
     assert high["fog_index"] > 0
 
 
+def test_page_number_and_table_stay_out_of_score():
+    from filingtext.clean import clean_body_report
+
+    raw = "[[PAGE:7]]\n7 / 143\n营业收入保持增长，盈利能力稳健，董事会认为经营正常。\n12.1 13.2 14.3 15.4 16.5\n[[PAGE:8]]\n公司推进绿色转型。\n"
+    cleaned, drops, meta = clean_body_report(raw)
+    assert "7 / 143" not in cleaned
+    assert "12.1" not in cleaned
+    assert "[[PAGE:" not in cleaned
+    assert "绿色转型" in cleaned
+    assert meta["page_start"] == 7
+    assert meta["page_end"] == 8
+    assert any(item["reason"] == "页码" for item in drops)
+    assert any(item["reason"] == "表格行" for item in drops)
+
+
+def test_disclosure_diff_lists_new_sentence():
+    from filingtext.features import disclosure_diff
+
+    previous = "报告期内公司营业收入保持增长，盈利能力稳健，环保投入继续提升。"
+    current = "报告期内公司营业收入保持增长，并试点人工智能与数字化转型，出口管制压力上升。"
+    diff = disclosure_diff(previous, current, "CN")
+    changed = diff["added"] + [item["after"] for item in diff["replaced"]]
+    assert any("人工智能" in sentence for sentence in changed)
+    assert any(item["term"] == "人工智能" and item["change"] > 0 for item in diff["topic_changes"])
+
+
 def test_negation_flips_positive_word():
     plain = score_document("公司实现改善，盈利能力稳健。", "CN")
     negated = score_document("公司没有改善，盈利能力稳健。", "CN")

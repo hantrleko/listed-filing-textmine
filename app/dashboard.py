@@ -13,11 +13,11 @@ sys.path.insert(0, str(ROOT / "src"))
 import pandas as pd
 import streamlit as st
 
-from filingtext.clean import normalize
+from filingtext.clean import CLEANING_RULES, normalize
 from filingtext.config import OUTPUT_DIR, WORKSPACE_OUT
 from filingtext.extract import extract_pdf, html_to_text
-from filingtext.features import EN_STOP, ZH_STOP, apply_corpus, highlight_spans, score_document, tokenize
-from filingtext.lexicon import tone_lexicons, topic_lexicons
+from filingtext.features import EN_STOP, ZH_STOP, apply_corpus, disclosure_diff, highlight_spans, score_document, tokenize
+from filingtext.lexicon import DICTIONARY_VERSION, tone_lexicons, topic_lexicons
 from filingtext.parse_job import parse_text
 from filingtext.samples import SAMPLE_DOCS
 from filingtext.sections import diagnose_anchors, split_sections
@@ -82,17 +82,14 @@ def main() -> None:
     extra_terms = _split_terms(st.sidebar.text_area("临时词", height=90, placeholder="一行一个，或用逗号分隔"), lang)
 
     if mode == "样本案例":
-        _render_case_intro(sample_name, market, sample_frame)
-    view, section_name, anchors, parsed = _prepare(raw, market, form)
-    if mode == "样本案例" and raw and view:
-        for note in _trap_notes(raw, view, market, section_name):
-            st.success(note)
+        _render_case_intro(sample_name, market, sample_frame, int(year), docs)
+    view, section_name, anchors, parsed, row = _prepare(raw, market, form)
 
-    tabs = st.tabs(["词典高亮", "词云", "章节诊断", "面板时序"])
+    tabs = st.tabs(["原文与清洗", "词云", "方法与诊断", "面板时序"])
     with tabs[0]:
         if view:
-            st.caption("绿色是 ESG / 绿色转型，蓝色是数智化 / AI，橙色是地缘风险。")
-            _render_highlight(view, market, lang, section_name, selected, extra_terms)
+            _render_highlight(view, market, lang, section_name, selected, extra_terms, row)
+            _render_clean_compare(row, market, section_name)
         else:
             st.info("左侧可以看样本案例。做自己的表时，用「我的面板」填写代码和年份，或上传文件。")
     with tabs[1]:
@@ -101,30 +98,13 @@ def main() -> None:
         else:
             st.info("先提供一段文本。")
     with tabs[2]:
-        if raw:
-            st.dataframe(pd.DataFrame(anchors), use_container_width=True, height=320)
-            st.dataframe(
-                pd.DataFrame(
-                    [
-                        {"section": row["section"], "found": row["found"], "n_chars": row["n_chars"], "n_tokens": row["n_tokens"]}
-                        for row in parsed
-                    ]
-                ),
-                use_container_width=True,
-            )
-        else:
-            st.info("先提供一段文本。")
+        _render_method(anchors if raw else [], parsed if raw else [])
     with tabs[3]:
-        _render_panel(panel_dir)
+        _render_panel(panel_dir, fallback=sample_frame if mode == "样本案例" else None)
 
 
+@st.cache_data(show_spinner=False)
 def _case_frame(ticker: str) -> pd.DataFrame:
-    panel = OUTPUT_DIR / "panel.parquet"
-    if panel.exists():
-        frame = pd.read_parquet(panel)
-        subset = frame[frame["ticker"].astype(str) == ticker].copy()
-        if not subset.empty:
-            return subset
     docs = [doc for doc in SAMPLE_DOCS if doc["ticker"] == ticker]
     rows: list[dict] = []
     for doc in docs:
@@ -138,59 +118,32 @@ def _case_frame(ticker: str) -> pd.DataFrame:
                     "firm_name": doc["firm_name"],
                     "fiscal_year": doc["fiscal_year"],
                     "report_type": doc["report_type"],
-                    "sections": ["mda", "risk"] if doc["market"] == "US" else ["mda"],
+                    "sections": ["mda", "risk"] if doc["market"] == "US" else ["mda", "risk"],
                 },
             )
         )
     apply_corpus(rows)
     for row in rows:
         row.pop("section_text", None)
+        row.pop("section_raw", None)
+        row.pop("clean_log", None)
     return pd.DataFrame(rows)
 
 
-def _render_case_intro(name: str, market: str, frame: pd.DataFrame) -> None:
+def _render_case_intro(name: str, market: str, frame: pd.DataFrame, year: int, docs: list[dict]) -> None:
     st.subheader(name)
-    st.caption("合成文本，用来看切分和指标。不是真实公司的披露。")
-    if market == "CN":
-        st.markdown(
-            "目录里的点线和页码留在正文外面。"
-            "单独一行的「社会责任」不会把管理层讨论截断。"
-            "第四节公司治理整段不进入 MD&A。"
-        )
-    else:
-        st.markdown(
-            "目录里带页码的 Item 行会丢掉。"
-            "10-K 的风险因素是 Item 1A，MD&A 是 Item 7。"
-            "Item 8 的报表句留在这两段外面。在「查看范围」里可以改看 risk。"
-        )
+    st.caption("合成多年样本。词频是披露用词，不是经营表现。口径见「方法与诊断」。")
     if frame is None or frame.empty:
         return
     show = frame.sort_values(["fiscal_year", "section"]).copy()
     if "found" in show.columns:
         show = show[show["found"] == 1]
-    columns = {
-        "fiscal_year": "年份",
-        "section": "章节",
-        "digital_per_k": "数智化/千词",
-        "esg_per_k": "ESG/千词",
-        "geopol_per_k": "地缘/千词",
-        "tone_net": "语气净值",
-        "disclosure_drift": "披露漂移",
-        "fog_index": "Fog",
-    }
-    table = show[list(columns)].rename(columns=columns)
-    for column in table.columns:
-        if column in {"年份", "章节"}:
-            continue
-        table[column] = pd.to_numeric(table[column], errors="coerce").round(3)
-    st.dataframe(table, hide_index=True, use_container_width=True)
-    st.write(_describe_case(show))
-    st.caption(
-        "每千词 = 命中次数 / 内容词数 × 1000。"
-        "语气净值 = (积极词 − 消极词) / 内容词数，大于 0 表示积极词更多。"
-        "披露漂移 = 1 − 与上一年同一章节的相似度，第一年为空。"
-        "Fog 越高，文本越难读。"
-    )
+    mda = show[show["section"] == "mda"]
+    if len(mda) >= 2:
+        chart = mda.set_index("fiscal_year")[["esg_per_k", "digital_per_k", "geopol_per_k", "tone_net"]]
+        st.line_chart(chart)
+        st.write(_describe_case(show))
+    _render_drift(docs, year, market, "mda")
 
 
 def _describe_case(frame: pd.DataFrame) -> str:
@@ -243,7 +196,7 @@ def _source_text() -> str:
 
 def _prepare(raw: str, market: str, form: str):
     if not raw:
-        return "", "", [], []
+        return "", "", [], [], None
     form_arg = None if market == "CN" else form
     sections = split_sections(raw, market, form=form_arg)
     names = ["全文"] + list(sections)
@@ -260,9 +213,10 @@ def _prepare(raw: str, market: str, form: str):
     )
     anchors = diagnose_anchors(raw, market, form=form_arg)
     if choice == "全文":
-        return raw, "全文", anchors, parsed
-    cleaned = next((row.get("section_text") for row in parsed if row["section"] == choice and row.get("section_text")), "")
-    return cleaned or sections[choice].text, choice, anchors, parsed
+        return raw, "全文", anchors, parsed, None
+    chosen_row = next((item for item in parsed if item["section"] == choice), None)
+    cleaned = (chosen_row or {}).get("section_text") or ""
+    return cleaned or sections[choice].text, choice, anchors, parsed, chosen_row
 
 
 def _read_upload(uploaded) -> str:
@@ -297,22 +251,147 @@ def _groups(lang: str, selected: list[str], extra_terms: list[str]) -> list[tupl
     return groups
 
 
-def _render_highlight(text, market, lang, section_name, selected, extra_terms) -> None:
+def _render_highlight(text, market, lang, section_name, selected, extra_terms, row) -> None:
     scored = score_document(text, market)
+    st.warning(
+        "词频衡量的是披露用词强度，不是真实风险或 ESG 表现。"
+        "某一类为 0，只表示词典版本 "
+        f"{DICTIONARY_VERSION} 没有命中，不能据此说企业没有该类风险。"
+    )
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("章节", section_name)
     c2.metric("内容词", f"{scored['n_tokens']}")
     c3.metric("Fog", _fmt(scored["fog_index"]))
     c4.metric("语气净值", _fmt(scored["tone_net"]))
     c5, c6, c7 = st.columns(3)
-    c5.metric("ESG 每千词", _fmt(scored["esg_per_k"]))
-    c6.metric("数智化每千词", _fmt(scored["digital_per_k"]))
-    c7.metric("地缘每千词", _fmt(scored["geopol_per_k"]))
+    c5.metric("ESG 词频/千词", _fmt(scored["esg_per_k"]))
+    c6.metric("数智化词频/千词", _fmt(scored["digital_per_k"]))
+    c7.metric("地缘词频/千词", _fmt(scored["geopol_per_k"]))
+    if row and row.get("page_start"):
+        st.caption(f"章节大约在第 {row['page_start']}–{row['page_end']} 页。页码和表格行已从分母里去掉。")
     spans = highlight_spans(text, _groups(lang, selected, extra_terms), lang)
+    st.caption("绿色是 ESG 用词，蓝色是数智化用词，橙色是地缘用词。高亮的是清洗后正文。")
     st.markdown(_html(text, spans), unsafe_allow_html=True)
     counts = Counter(label for _a, _b, label in spans)
     if counts:
         st.write({LABELS.get(key, key): int(value) for key, value in counts.items()})
+
+
+def _render_clean_compare(row, market: str, section_name: str) -> None:
+    if not row:
+        return
+    raw = row.get("section_raw") or ""
+    cleaned = row.get("section_text") or ""
+    left, right = st.columns(2)
+    left.markdown("**原文片段**")
+    left.text((raw or "没有切出这一章。")[:2500])
+    right.markdown("**清洗后，只对这份计分**")
+    right.text((cleaned or "清洗后不足 40 字，未计分。")[:2500])
+    st.caption(
+        f"边界标题：{row.get('section_header') or '未识别'}。"
+        f"删除 {row.get('n_dropped_lines') or 0} 行。"
+        "页码和表格行不进入分词、每千词分母和 Fog。"
+    )
+    log = row.get("clean_log") or []
+    if log:
+        st.dataframe(pd.DataFrame(log), use_container_width=True, height=220)
+    prior = _prior_workspace_text(row)
+    if prior:
+        _show_diff(prior, cleaned, market, int(row["fiscal_year"]))
+    elif row.get("text_path") and row.get("fiscal_year"):
+        st.info(f"{int(row['fiscal_year'])} 年没有找到上一年同一章节。披露漂移为空，这不是趋势。")
+
+
+def _render_drift(docs: list[dict], year: int, market: str, section: str) -> None:
+    years = sorted(doc["fiscal_year"] for doc in docs)
+    st.session_state["sample_years"] = years
+    previous = next((doc for doc in docs if doc["fiscal_year"] == year - 1), None)
+    current = next((doc for doc in docs if doc["fiscal_year"] == year), None)
+    if current is None:
+        return
+    if previous is None:
+        st.info(f"{year} 年没有上一年同一章节。披露漂移为空，不能把这一年的分数读成趋势。")
+        return
+    before = _section_body(previous, section)
+    after = _section_body(current, section)
+    _show_diff(before, after, market, year)
+
+
+def _section_body(doc: dict, section: str) -> str:
+    rows = parse_text(
+        doc["text"],
+        {
+            "path": doc["filename"],
+            "market": doc["market"],
+            "ticker": doc["ticker"],
+            "fiscal_year": doc["fiscal_year"],
+            "report_type": doc["report_type"],
+            "sections": [section],
+        },
+    )
+    return rows[0].get("section_text") or ""
+
+
+def _show_diff(before: str, after: str, market: str, year: int) -> None:
+    diff = disclosure_diff(before, after, market)
+    with st.expander(f"相对 {year - 1} 年的段落变化", expanded=True):
+        if diff["topic_changes"]:
+            st.write("主题词次数变化（本年 − 上年）")
+            st.dataframe(pd.DataFrame(diff["topic_changes"]), hide_index=True, use_container_width=True)
+        if diff["added"]:
+            st.markdown("**本年多出来的句子**")
+            for sentence in diff["added"]:
+                st.write(sentence)
+        if diff["removed"]:
+            st.markdown("**上年有、本年没有的句子**")
+            for sentence in diff["removed"]:
+                st.write(sentence)
+        if diff["replaced"]:
+            st.markdown("**改写最大的句子**")
+            st.dataframe(pd.DataFrame(diff["replaced"]), hide_index=True, use_container_width=True)
+        if not any(diff[key] for key in ("added", "removed", "replaced", "topic_changes")):
+            st.write("两年句子几乎相同。")
+
+
+def _prior_workspace_text(row: dict) -> str:
+    if not row or not row.get("fiscal_year") or not row.get("text_path"):
+        return ""
+    current = Path(str(row["text_path"]))
+    previous = Path(str(current).replace(str(int(row["fiscal_year"])), str(int(row["fiscal_year"]) - 1)))
+    if previous.exists() and previous != current:
+        return previous.read_text(encoding="utf-8")
+    return ""
+
+
+def _render_method(anchors: list[dict], parsed: list[dict]) -> None:
+    st.markdown(f"**词典版本** {DICTIONARY_VERSION}。这是种子词，不是 Loughran-McDonald 官方全表。")
+    st.markdown(
+        "中文用 jieba，并先把词典里的词加成固定词。英文按词边界匹配，长词优先，所以 loss 不会算进 losses。"
+        "每千词 = 命中次数 / 清洗后内容词数 × 1000。"
+        "中文 Fog 是类比式：0.4 ×（词数/句数 + 100 × 四字及以上词占比），不能和英文 Gunning Fog 直接比高低。"
+    )
+    for rule in CLEANING_RULES:
+        st.write(rule)
+    if anchors:
+        st.markdown("**章节边界**")
+        st.dataframe(pd.DataFrame(anchors), use_container_width=True, height=240)
+    if parsed:
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "section": item["section"],
+                        "found": item["found"],
+                        "page_start": item.get("page_start"),
+                        "page_end": item.get("page_end"),
+                        "n_dropped_lines": item.get("n_dropped_lines"),
+                        "n_tokens": item.get("n_tokens"),
+                    }
+                    for item in parsed
+                ]
+            ),
+            use_container_width=True,
+        )
 
 
 def _render_cloud(text: str, lang: str) -> None:
@@ -360,6 +439,9 @@ def _workspace_page() -> tuple[str, str, str]:
     message = st.session_state.get("ws_message")
     if message:
         st.info(message)
+    events = st.session_state.get("ws_events") or []
+    if events:
+        st.dataframe(pd.DataFrame(events), hide_index=True, use_container_width=True, height=180)
     return _workspace_selection()
 
 
@@ -378,8 +460,13 @@ def _fetch_form() -> None:
     if st.button("抓取并生成面板"):
         from filingtext.workspace import build_from_codes
 
+        events: list[dict] = []
         try:
-            with st.spinner("正在下载并解析。年报 PDF 会比 HTML 慢。"):
+            with st.status("抓取进度", expanded=True) as box:
+                def _on_event(event: dict) -> None:
+                    events.append(event)
+                    box.write(f"{event['stage']} · {event['detail']} · {event['state']}")
+
                 result = build_from_codes(
                     "US" if market.startswith("美股") else "CN",
                     codes,
@@ -387,14 +474,19 @@ def _fetch_form() -> None:
                     end,
                     edgar_contact=contact,
                     forms=forms,
+                    on_event=_on_event,
                 )
+                box.update(label="完成", state="complete")
             summary = result["summary"]
+            st.session_state["ws_events"] = events
             st.session_state["ws_message"] = (
                 f"完成：下载 {len(result.get('downloaded') or [])} 份，"
                 f"有效章节 {summary['n_found']} 个，公司 {summary['n_firms']} 家。"
+                "失败的文件可再次点击抓取，已成功的会保留。"
             )
             st.rerun()
         except Exception as exc:
+            st.session_state["ws_events"] = events
             st.error(str(exc))
 
 
@@ -456,13 +548,26 @@ def _read_cached(path_str: str, _mtime: float) -> str:
     return read_filing(path_str)
 
 
-def _render_panel(out_dir: Path = OUTPUT_DIR) -> None:
+def _render_memory_panel(frame: pd.DataFrame) -> None:
+    show = frame[frame["found"] == 1] if "found" in frame.columns else frame
+    mda = show[show["section"] == "mda"] if "section" in show.columns else show
+    if not mda.empty and mda["fiscal_year"].nunique() >= 2:
+        st.line_chart(mda.set_index("fiscal_year")[["esg_per_k", "digital_per_k", "geopol_per_k", "disclosure_drift"]])
+        if mda["disclosure_drift"].isna().any():
+            st.caption("披露漂移为空的年份没有上一年，不能把那一年读成变化。")
+    st.dataframe(show, use_container_width=True, height=280)
+
+
+def _render_panel(out_dir: Path = OUTPUT_DIR, fallback: pd.DataFrame | None = None) -> None:
     parquet = out_dir / "panel.parquet"
     wide_path = out_dir / "panel_wide.parquet"
     trend_path = out_dir / "trend_by_year.csv"
     figure = out_dir / "trends.png"
     if not parquet.exists():
-        st.info("还没有面板。样本案例来自 python -m filingtext.demo；自己的文件在「我的面板」生成。")
+        if fallback is not None and not fallback.empty:
+            _render_memory_panel(fallback)
+            return
+        st.info("我的面板还没有文件。左侧选「样本案例」可以直接看多年结果。")
         return
     if out_dir == OUTPUT_DIR:
         st.caption("下面是同一批合成样本的公司-年度面板，和上面的案例用的是同一套数字。")

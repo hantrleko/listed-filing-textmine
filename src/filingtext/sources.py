@@ -136,11 +136,17 @@ def list_cninfo_annual(
     return found
 
 
+def _emit(on_event, stage: str, detail: str, state: str = "run") -> None:
+    if on_event:
+        on_event({"stage": stage, "detail": detail, "state": state})
+
+
 def download_cninfo(
     codes: list[str],
     start: int,
     end: int,
     out_dir: str | Path,
+    on_event=None,
 ) -> list[Path]:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -150,10 +156,16 @@ def download_cninfo(
         code = code.strip()
         if not code:
             continue
-        org = search_cninfo_org(code, session)
-        org_id = org.get("orgId") or ""
-        name = org.get("zwjc") or ""
-        anns = list_cninfo_annual(code, org_id, start, end, session)
+        _emit(on_event, "查找公告", code)
+        try:
+            org = search_cninfo_org(code, session)
+            org_id = org.get("orgId") or ""
+            name = org.get("zwjc") or ""
+            anns = list_cninfo_annual(code, org_id, start, end, session)
+        except Exception as exc:
+            _emit(on_event, "查找公告", f"{code}：{exc}", "fail")
+            continue
+        _emit(on_event, "查找公告", f"{code} {name}，{len(anns)} 条", "ok")
         for ann in anns:
             title = str(ann.get("announcementTitle") or "")
             if not is_full_annual_title(title):
@@ -165,8 +177,14 @@ def download_cninfo(
             if not adjunct:
                 continue
             dest = out / f"{code}_{year}_annual.pdf"
-            _stream(session, cninfo_pdf_url(adjunct), dest)
+            _emit(on_event, "下载", dest.name)
+            try:
+                _stream(session, cninfo_pdf_url(adjunct), dest)
+            except Exception as exc:
+                _emit(on_event, "下载", f"{dest.name}：{exc}", "fail")
+                continue
             saved.append(dest)
+            _emit(on_event, "下载", dest.name, "ok")
             _append_manifest(
                 out,
                 {
@@ -202,6 +220,7 @@ def download_edgar(
     out_dir: str | Path,
     forms: list[str] | None = None,
     include_amendments: bool = False,
+    on_event=None,
 ) -> list[Path]:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -213,9 +232,15 @@ def download_edgar(
         if cik.strip():
             pairs.append(("", str(cik).zfill(10)))
     for ticker in tickers:
-        if ticker.strip():
+        if not ticker.strip():
+            continue
+        _emit(on_event, "查找公告", ticker.strip().upper())
+        try:
             pairs.append((ticker.strip().upper(), lookup_cik(ticker.strip(), session)))
-            time.sleep(0.2)
+            _emit(on_event, "查找公告", ticker.strip().upper(), "ok")
+        except Exception as exc:
+            _emit(on_event, "查找公告", f"{ticker}：{exc}", "fail")
+        time.sleep(0.2)
     for ticker, cik in pairs:
         url = SEC_SUBMISSIONS.format(cik=cik)
         response = session.get(url, timeout=60)
@@ -240,8 +265,14 @@ def download_edgar(
             label = ticker or cik
             kind = form.replace("-", "").replace("/", "")
             dest = out / f"{label}_{year}_{kind}{ext}"
-            _stream(session, file_url, dest)
+            _emit(on_event, "下载", dest.name)
+            try:
+                _stream(session, file_url, dest)
+            except Exception as exc:
+                _emit(on_event, "下载", f"{dest.name}：{exc}", "fail")
+                continue
             saved.append(dest)
+            _emit(on_event, "下载", dest.name, "ok")
             _append_manifest(
                 out,
                 {

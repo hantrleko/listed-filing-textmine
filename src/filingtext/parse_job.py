@@ -6,7 +6,7 @@ import logging
 import re
 from pathlib import Path
 
-from filingtext.clean import clean_body, normalize
+from filingtext.clean import clean_body_report, normalize
 from filingtext.config import DEFAULT_SECTIONS
 from filingtext.extract import read_filing
 from filingtext.features import score_document
@@ -62,9 +62,11 @@ def parse_text(text: str, meta: dict) -> list[dict]:
     rows = []
     for key in sections:
         section = found_sections.get(key)
-        body = clean_body(section.text) if section else ""
-        if market == "CN" and body:
-            body = "\n".join(ln for ln in body.splitlines() if ln.strip() not in CN_BARE_TITLES).strip()
+        raw_body = section.text if section else ""
+        body, drops, provenance = clean_body_report(
+            raw_body,
+            skip_lines=CN_BARE_TITLES if market == "CN" else None,
+        )
         found = int(len(body) >= 40)
         record = _base_record(
             {
@@ -80,6 +82,12 @@ def parse_text(text: str, meta: dict) -> list[dict]:
             error="",
         )
         record["form"] = form
+        record["page_start"] = provenance["page_start"]
+        record["page_end"] = provenance["page_end"]
+        record["n_dropped_lines"] = provenance["n_dropped_lines"]
+        record["section_header"] = section.header if section else ""
+        record["section_raw"] = raw_body
+        record["clean_log"] = drops
         record["section_text"] = body if found else ""
         if found:
             record.update(score_document(body, market, tone_override=tone_override))

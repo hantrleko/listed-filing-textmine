@@ -301,6 +301,55 @@ def cosine_tfidf(c1: dict, c2: dict, idf: dict[str, float], lang: str) -> float 
     return dot / math.sqrt(n1 * n2)
 
 
+def _sentences(text: str, lang: str) -> list[str]:
+    if lang == "zh":
+        parts = re.split(r"[。！？\n]+", text)
+    else:
+        parts = re.split(r"(?<=[.!?])\s+|\n+", text)
+    return [part.strip() for part in parts if len(part.strip()) >= 12]
+
+
+def disclosure_diff(previous: str, current: str, market: str, limit: int = 6) -> dict:
+    """比较两年同一章节。只有一年时调用方应直接说明没有基期，不要把单年分数写成趋势。"""
+    import difflib
+
+    lang = language_for_market(market)
+    old = _sentences(previous or "", lang)
+    new = _sentences(current or "", lang)
+    added: list[str] = []
+    removed: list[str] = []
+    replaced: list[dict] = []
+    matcher = difflib.SequenceMatcher(a=old, b=new, autojunk=False)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "insert":
+            added.extend(new[j1:j2])
+        elif tag == "delete":
+            removed.extend(old[i1:i2])
+        elif tag == "replace":
+            for left, right in zip(old[i1:i2], new[j1:j2]):
+                replaced.append({"before": left, "after": right})
+            if i2 - i1 > j2 - j1:
+                removed.extend(old[i1 + (j2 - j1) : i2])
+            elif j2 - j1 > i2 - i1:
+                added.extend(new[j1 + (i2 - i1) : j2])
+    topics = topic_lexicons()[lang]
+    deltas = []
+    for name, terms in topics.items():
+        before = count_terms(previous or "", terms, lang)
+        after = count_terms(current or "", terms, lang)
+        for term in set(before) | set(after):
+            change = after.get(term, 0) - before.get(term, 0)
+            if change:
+                deltas.append({"lexicon": name, "term": term, "change": change})
+    deltas.sort(key=lambda item: abs(item["change"]), reverse=True)
+    return {
+        "added": added[:limit],
+        "removed": removed[:limit],
+        "replaced": replaced[:limit],
+        "topic_changes": deltas[:limit],
+    }
+
+
 def finbert_tone(text: str, model_name: str = "yiyanghkust/finbert-tone", max_chars: int = 8000) -> dict | None:
     """分块调用 FinBERT-tone，返回正/负/中性概率均值。模型不可用时返回 None。"""
     try:

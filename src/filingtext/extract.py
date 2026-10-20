@@ -24,7 +24,7 @@ def extract_pdf(path: str | Path) -> str:
 
     pages: list[list[str]] = []
     with pdfplumber.open(path) as pdf:
-        for page in pdf.pages:
+        for index, page in enumerate(pdf.pages, start=1):
             words = page.extract_words(use_text_flow=True, keep_blank_chars=False) or []
             height = float(page.height or 0)
             if words:
@@ -36,7 +36,7 @@ def extract_pdf(path: str | Path) -> str:
                     body.append(line["text"])
             else:
                 body = (page.extract_text() or "").splitlines()
-            pages.append(body)
+            pages.append([f"[[PAGE:{index}]]", *body])
     if len(pages) >= 3:
         return normalize(drop_repeated_pages(pages))
     joined = "\n".join(line for page in pages for line in page if line.strip())

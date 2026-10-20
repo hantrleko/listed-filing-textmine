@@ -6,5 +6,6 @@ __pycache__/
 data/raw/
 data/text/
 data/output/
-data/workspace/
+data/validation/raw/
+data/validation/text/
 data/samples/*.pdf

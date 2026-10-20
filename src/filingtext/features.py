@@ -192,6 +192,7 @@ def score_document(
         total = sum(hits.values())
         metrics[f"{name}_count"] = total
         metrics[f"{name}_per_k"] = _per_k(total, n_tokens)
+        metrics[f"{name}_per_char_k"] = (1000.0 * total / metrics["n_chars"]) if metrics["n_chars"] else None
         metrics[f"{name}_tfidf"] = None
     tone_counts = _tone_counts(text, tones, lang)
     metrics["tone_pos"] = _share(tone_counts["pos"], n_tokens)

@@ -7,7 +7,28 @@ from filingtext.sources import (
 )
 
 
-def test_exchange_and_source_date():
+def test_cohort_is_three_industries_and_forty_five_filings():
+    from filingtext.cohort import COHORT, cohort_jobs
+
+    industries = {row["industry"] for row in COHORT}
+    assert industries == {"白酒", "银行", "医药"}
+    assert len(COHORT) == 15
+    assert len(cohort_jobs()) == 45
+
+
+def test_audit_scores_need_human_labels():
+    from filingtext.audit import audit_scores
+
+    assert audit_scores([{"hit": "1", "label": ""}])["precision"] is None
+    scored = audit_scores(
+        [
+            {"hit": "1", "label": "relevant"},
+            {"hit": "1", "label": "irrelevant"},
+            {"hit": "0", "label": "relevant"},
+        ]
+    )
+    assert scored["precision"] == 0.5
+    assert round(scored["recall"], 2) == 0.5
     from filingtext.sources import exchange_for_code, filing_date_from_ms
 
     assert exchange_for_code("600519") == "上交所"

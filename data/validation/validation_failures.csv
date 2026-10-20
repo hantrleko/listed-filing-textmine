@@ -1,0 +1,1 @@
+﻿industry,firm_name,stkcd,fiscal_year,status,error,filing_date,source_url,exchange,fetched_at,mda_found,page_start,page_end,n_chars,n_tokens,n_dropped_lines,esg_count,esg_per_k,esg_per_char_k,digital_count,digital_per_k,digital_per_char_k,geopol_count,geopol_per_k,geopol_per_char_k,dictionary_version,app_version

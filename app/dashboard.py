@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "src"))
 import pandas as pd
 import streamlit as st
 
+from filingtext import __version__
 from filingtext.clean import CLEANING_RULES, normalize
 from filingtext.config import OUTPUT_DIR, WORKSPACE_OUT
 from filingtext.extract import extract_pdf, html_to_text
@@ -79,8 +80,8 @@ def _render_source(row: dict | None) -> None:
     )
     st.markdown(f"[打开原始申报文件]({row['source_url']})")
     st.caption(
-        f"抓取时间 {row.get('fetched_at') or '未知'} · 词典版本 {row.get('data_version') or DICTIONARY_VERSION} · "
-        f"章节 {row.get('section_header') or row.get('section') or ''}"
+        f"抓取时间 {row.get('fetched_at') or '未知'} · 词典 {row.get('data_version') or DICTIONARY_VERSION} · "
+        f"程序 {__version__} · 章节 {row.get('section_header') or row.get('section') or ''}"
     )
 
 
@@ -311,6 +312,11 @@ def _render_highlight(text, market, lang, section_name, selected, extra_terms, r
     c5.metric("ESG 词频/千词", _fmt(scored["esg_per_k"]))
     c6.metric("数智化词频/千词", _fmt(scored["digital_per_k"]))
     c7.metric("地缘词频/千词", _fmt(scored["geopol_per_k"]))
+    st.caption(
+        f"同时看三列：ESG 命中 {scored['esg_count']} 次、每千词 {_fmt(scored['esg_per_k'])}、每千字 {_fmt(scored['esg_per_char_k'])}；"
+        f"本章 {scored['n_chars']} 字。章节没切出来时这些值是空的，不是 0。"
+        "每千词和每千字是两套分母，用来看结论会不会被篇幅算法带偏。"
+    )
     if row and row.get("page_start"):
         st.caption(f"章节大约在第 {row['page_start']}–{row['page_end']} 页。页码和表格行已从分母里去掉。")
     picks = st.columns(3)

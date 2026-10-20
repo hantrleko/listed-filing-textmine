@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass
 CN_TITLES: list[tuple[str, int, str]] = [
     ("mda", 0, "管理层讨论与分析"),
     ("mda", 1, "经营情况讨论与分析"),
+    ("mda", 1, "讨论与分析"),
     ("mda", 2, "董事会报告"),
     ("governance", 0, "公司治理结构"),
     ("governance", 1, "公司治理"),
@@ -72,9 +73,14 @@ _CN_TOC = re.compile(
     r"^(?P<head>.*?)(?:[ \t]*[\.·．…]{2,}[ \t]*(?P<page>\d{1,4})|[ \t]{2,}(?P<page2>\d{1,4}))\s*$"
 )
 _CN_ENUM = re.compile(
-    r"^(?:第[一二三四五六七八九十百零〇0-9]{1,3}[章节]|[（(][一二三四五六七八九十]+[)）]、|[一二三四五六七八九十]+、|\d{1,2}[、.．])\s*"
+    r"^(?:第[一二三四五六七八九十百零〇0-9]{1,3}[章节]|[（(][一二三四五六七八九十]+[)）]、|[一二三四五六七八九十]+、|\d{1,2}[、.．]|\d{1,2}\s+)\s*"
 )
 _CN_HARD = re.compile(r"第[一二三四五六七八九十百零〇0-9]{1,3}[章节]")
+_CN_NUMBERED = re.compile(r"^\d{1,2}\s+")
+
+
+def _is_hard(head: str) -> bool:
+    return bool(_CN_HARD.search(head) or _CN_NUMBERED.match(head.strip()))
 
 _US_ITEM = re.compile(
     r"^[ \t]*item[ \t]+(?P<num>1a|1b|1c|7a|9a|9b|9c|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15)\b"
@@ -163,10 +169,7 @@ def _choose(anchors: list[Anchor]) -> tuple[list[Anchor], list[int]]:
     for group in grouped.values():
         best = sorted(group, key=lambda a: (a.priority, 0 if a.hard else 1, -span(a)))[0]
         chosen.append(best)
-    # 只在被选中的硬标题处切片，同义章节和小节标题不会把正文截断。
-    slice_points = sorted(a.start for a in chosen if a.hard)
-    if not slice_points:
-        slice_points = sorted(a.start for a in chosen)
+    slice_points = sorted(a.start for a in hard) if hard else sorted(a.start for a in chosen)
     return chosen, slice_points
 
 
@@ -212,13 +215,13 @@ def _parse_cn_line(line: str) -> tuple[str, int, str, bool, bool, int] | None:
         hit = _CN_TITLE_MAP.get(title)
         if hit is not None:
             section, priority = hit
-            return section, priority, title, True, bool(_CN_HARD.search(head)), len(raw)
+            return section, priority, title, True, _is_hard(head), len(raw)
     if len(raw) <= 80:
         title = _CN_ENUM.sub("", raw).strip(" ：:.")
         hit = _CN_TITLE_MAP.get(title)
         if hit is not None:
             section, priority = hit
-            return section, priority, title, False, bool(_CN_HARD.search(raw)), len(raw)
+            return section, priority, title, False, _is_hard(raw), len(raw)
     return _cn_prefix(raw)
 
 
@@ -237,7 +240,7 @@ def _cn_prefix(head: str) -> tuple[str, int, str, bool, bool, int] | None:
         while after < len(head) and head[after] in " \t：:":
             after += 1
         section, priority = _CN_TITLE_MAP[title]
-        return section, priority, title, False, bool(_CN_HARD.search(head[:after])), after
+        return section, priority, title, False, _is_hard(head[:after]), after
     return None
 
 

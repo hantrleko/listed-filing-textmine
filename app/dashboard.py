@@ -75,20 +75,26 @@ def _render_source(row: dict | None) -> None:
         pages = f"第 {row['page_start']}–{row['page_end']} 页"
     st.markdown(
         f"**来源** {row.get('firm_name') or ''} {row.get('stkcd') or row.get('ticker') or ''} · "
-        f"{row.get('fiscal_year') or ''} 年{row.get('report_type') or ''} · "
-        f"公告日期 {row.get('filing_date') or '未知'} · {row.get('exchange') or ''} · {pages}"
+        f"报告期 {row.get('fiscal_year') or ''} 年{row.get('report_type') or ''} · "
+        f"公告日 / 可用日 {row.get('available_date') or row.get('filing_date') or '缺失'} · "
+        f"{row.get('exchange') or ''} · {pages}"
     )
-    st.markdown(f"[打开原始申报文件]({row['source_url']})")
+    if row.get("source_url"):
+        st.markdown(f"[打开原始申报文件]({row['source_url']})")
     st.caption(
-        f"抓取时间 {row.get('fetched_at') or '未知'} · 词典 {row.get('data_version') or DICTIONARY_VERSION} · "
-        f"程序 {__version__} · 章节 {row.get('section_header') or row.get('section') or ''}"
+        "回归对齐用 available_date（公告日），不要把 fiscal_year 当成信息已经公开的日期。"
+        f" 词典 {row.get('data_version') or DICTIONARY_VERSION} · 程序 {row.get('app_version') or __version__}"
+        f" · 原文 SHA1 {str(row.get('source_sha1') or '')[:12] or '无'}"
     )
 
 
 def main() -> None:
     st.set_page_config(page_title="年报文本特征引擎", layout="wide")
     st.title("上市公司文本特征引擎")
-    st.caption("章节切分、词典命中高亮、词云和面板时序。语气词是可编辑种子词，不是 Loughran-McDonald 官方全表。")
+    st.caption(
+        "章节切分、词典命中高亮、词云和面板时序。语气词是可编辑种子词，不是 Loughran-McDonald 官方全表。"
+        " 源码与处理规则：[hantrleko/listed-filing-textmine](https://github.com/hantrleko/listed-filing-textmine)。"
+    )
 
     mode = st.sidebar.radio("开始", ["样本案例", "我的面板"], horizontal=True)
     if mode == "样本案例":
@@ -570,7 +576,7 @@ def _barh(top: pd.DataFrame, font: str | None) -> None:
 
 def _workspace_page() -> tuple[str, str, str, dict]:
     st.subheader("我的面板")
-    st.caption("代码和年份会下载原文再解析。上传的文件会进入同一张表。样本案例的数字不会被这里改掉。单次最多下载 8 份。")
+    st.caption("代码和年份会下载原文再解析。上传的文件会进入同一张表。样本案例的数字不会被这里改掉。网页单次最多 8 份；更大的样本用 scripts/build_factor_panel.py，导出 panel_factor.dta。")
     action = st.radio("加入文件", ["按代码和年份抓取", "上传已有文件"], horizontal=True)
     if action == "按代码和年份抓取":
         _fetch_form()
@@ -736,7 +742,7 @@ def _render_panel(out_dir: Path = OUTPUT_DIR, fallback: pd.DataFrame | None = No
     if out_dir == OUTPUT_DIR:
         st.caption("下面是同一批合成样本的公司-年度面板，和上面的案例用的是同一套数字。")
     else:
-        st.caption("长表是一章一行。宽表是一行一个公司—年度，MD&A 和风险因素分成两列，A 股 stkcd 保留前导零。")
+        st.caption("长表是一章一行。宽表是一行一个公司—年度。因子表用 ticker、fiscal_year、fiscal_quarter、available_date，可并到因子工作台；available_date 是公告日。")
     frame = pd.read_parquet(parquet)
     st.dataframe(frame, use_container_width=True, height=280)
     _download_row(out_dir)
@@ -757,14 +763,17 @@ def _render_panel(out_dir: Path = OUTPUT_DIR, fallback: pd.DataFrame | None = No
 
 
 def _download_row(out_dir: Path) -> None:
-    columns = st.columns(4)
+    columns = st.columns(3)
     files = [
         ("长表 CSV", out_dir / "panel.parquet", "panel.csv", "csv"),
         ("长表 dta", out_dir / "panel.dta", "panel.dta", "dta"),
         ("宽表 CSV", out_dir / "panel_wide.parquet", "panel_wide.csv", "csv"),
         ("宽表 dta", out_dir / "panel_wide.dta", "panel_wide.dta", "dta"),
+        ("因子表 CSV", out_dir / "panel_factor.parquet", "panel_factor.csv", "csv"),
+        ("因子表 dta", out_dir / "panel_factor.dta", "panel_factor.dta", "dta"),
     ]
-    for column, (label, path, name, kind) in zip(columns, files):
+    for index, (label, path, name, kind) in enumerate(files):
+        column = columns[index % 3]
         if not path.exists():
             continue
         if kind == "csv":

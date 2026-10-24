@@ -29,7 +29,7 @@ def to_frame(records: list[dict]) -> pd.DataFrame:
         if column not in frame.columns:
             frame[column] = pd.NA
     frame = frame[PANEL_COLUMNS].copy()
-    for column in ("found", "is_duplicate", "comparable"):
+    for column in ("found", "is_duplicate", "comparable", "pit_ready"):
         frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0).astype(int)
     frame["fiscal_year"] = pd.to_numeric(frame["fiscal_year"], errors="coerce")
     for column in METRIC_COLUMNS + [
@@ -39,6 +39,7 @@ def to_frame(records: list[dict]) -> pd.DataFrame:
         "page_start",
         "page_end",
         "n_dropped_lines",
+        "fiscal_quarter",
         "avg_sentence_len",
         "complex_word_ratio",
         "tone_pos",
@@ -59,15 +60,19 @@ def to_frame(records: list[dict]) -> pd.DataFrame:
         "geopol_per_char_k",
     ]:
         frame[column] = pd.to_numeric(frame[column], errors="coerce")
-    for column in ("doc_id", "market", "ticker", "stkcd", "cik", "firm_name", "report_type", "form", "section", "source_path", "text_path", "raw_text_path", "clean_log_path", "text_sha1", "filing_date", "source_url", "exchange", "fetched_at", "data_version", "quality_flags", "fog_method", "tone_method", "error"):
+    for column in ("doc_id", "market", "ticker", "stkcd", "cik", "firm_name", "report_type", "form", "section", "source_path", "text_path", "raw_text_path", "clean_log_path", "text_sha1", "filing_date", "available_date", "source_url", "source_sha1", "exchange", "fetched_at", "data_version", "app_version", "quality_flags", "fog_method", "tone_method", "error"):
         frame[column] = frame[column].fillna("").astype(str)
     return frame
 
 
 WIDE_VALUE_COLUMNS = [
     "found",
+    "comparable",
     "n_chars",
     "n_tokens",
+    "esg_count",
+    "digital_count",
+    "geopol_count",
     "fog_index",
     "tone_net",
     "tone_pos",
@@ -82,6 +87,38 @@ WIDE_VALUE_COLUMNS = [
     "disclosure_drift",
 ]
 
+FACTOR_COLUMNS = [
+    "ticker",
+    "fiscal_year",
+    "fiscal_quarter",
+    "available_date",
+    "pit_ready",
+    "stkcd",
+    "firm_name",
+    "market",
+    "source_url",
+    "source_sha1",
+    "dictionary_version",
+    "app_version",
+    "mda_found",
+    "mda_comparable",
+    "mda_n_tokens",
+    "mda_digital_count",
+    "mda_esg_count",
+    "mda_geopol_count",
+    "mda_digital_per_k",
+    "mda_esg_per_k",
+    "mda_geopol_per_k",
+    "mda_tone_net",
+    "risk_found",
+    "risk_comparable",
+    "risk_n_tokens",
+    "risk_digital_per_k",
+    "risk_esg_per_k",
+    "risk_geopol_per_k",
+    "risk_tone_net",
+]
+
 
 def to_wide(frame: pd.DataFrame) -> pd.DataFrame:
     """一行一个公司—年度。MD&A 与风险因素分成两套变量，stkcd 保留 6 位字符串。"""
@@ -90,10 +127,31 @@ def to_wide(frame: pd.DataFrame) -> pd.DataFrame:
         data["stkcd"] = ""
     data["stkcd"] = data["stkcd"].fillna("").astype(str)
     data["ticker"] = data["ticker"].fillna("").astype(str)
-    for column in ("filing_date", "source_url", "exchange", "fetched_at", "firm_name", "report_type"):
+    for column in ("filing_date", "available_date", "source_url", "source_sha1", "exchange", "fetched_at", "firm_name", "report_type", "data_version", "app_version"):
         if column not in data.columns:
             data[column] = ""
-    keys = ["market", "stkcd", "ticker", "firm_name", "fiscal_year", "report_type", "filing_date", "source_url", "exchange", "fetched_at"]
+    if "fiscal_quarter" not in data.columns:
+        data["fiscal_quarter"] = pd.NA
+    if "pit_ready" not in data.columns:
+        data["pit_ready"] = 0
+    keys = [
+        "market",
+        "stkcd",
+        "ticker",
+        "firm_name",
+        "fiscal_year",
+        "fiscal_quarter",
+        "report_type",
+        "filing_date",
+        "available_date",
+        "pit_ready",
+        "source_url",
+        "source_sha1",
+        "exchange",
+        "fetched_at",
+        "data_version",
+        "app_version",
+    ]
     for column in keys:
         if column not in data.columns:
             data[column] = pd.NA
@@ -109,6 +167,18 @@ def to_wide(frame: pd.DataFrame) -> pd.DataFrame:
         slim = part[["market", "ticker", "fiscal_year", *WIDE_VALUE_COLUMNS]].rename(columns=rename)
         wide = wide.merge(slim, on=["market", "ticker", "fiscal_year"], how="left")
     return wide.sort_values(["market", "ticker", "fiscal_year"]).reset_index(drop=True)
+
+
+def to_factor(frame: pd.DataFrame) -> pd.DataFrame:
+    """因子工作台主键：ticker、fiscal_year、fiscal_quarter、available_date。
+
+    available_date 等于公告日。fiscal_year 只表示报告期，不能单独拿来做时点对齐。
+    """
+    wide = to_wide(frame).rename(columns={"data_version": "dictionary_version"})
+    for column in FACTOR_COLUMNS:
+        if column not in wide.columns:
+            wide[column] = pd.NA
+    return wide[FACTOR_COLUMNS].copy()
 
 
 def write_duckdb(frame: pd.DataFrame, path: str | Path, wide: pd.DataFrame | None = None) -> int:
@@ -140,10 +210,15 @@ def export_panel(frame: pd.DataFrame, out_dir: str | Path) -> dict[str, Path]:
     wide_dta = out / "panel_wide.dta"
     duckdb_path = out / "panel.duckdb"
     wide = to_wide(frame)
+    factor = to_factor(frame)
     frame.to_parquet(parquet_path, index=False)
     wide.to_parquet(wide_parquet, index=False)
+    factor_parquet = out / "panel_factor.parquet"
+    factor_dta = out / "panel_factor.dta"
+    factor.to_parquet(factor_parquet, index=False)
     _to_stata(frame, dta_path)
     _to_stata(wide, wide_dta)
+    _to_stata(factor, factor_dta)
     write_duckdb(frame, duckdb_path, wide)
     summary = summarize(frame)
     (out / "diagnostics.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -155,6 +230,8 @@ def export_panel(frame: pd.DataFrame, out_dir: str | Path) -> dict[str, Path]:
         "dta": dta_path,
         "wide_parquet": wide_parquet,
         "wide_dta": wide_dta,
+        "factor_parquet": factor_parquet,
+        "factor_dta": factor_dta,
         "duckdb": duckdb_path,
         "diagnostics": out / "diagnostics.json",
         "trend": out / "trend_by_year.csv",
@@ -164,7 +241,7 @@ def export_panel(frame: pd.DataFrame, out_dir: str | Path) -> dict[str, Path]:
 
 def _to_stata(frame: pd.DataFrame, path: Path) -> None:
     out = frame.copy()
-    for column in ("stkcd", "ticker", "cik", "firm_name", "market"):
+    for column in ("stkcd", "ticker", "cik", "firm_name", "market", "available_date", "source_url", "source_sha1", "dictionary_version", "app_version"):
         if column in out.columns:
             out[column] = out[column].fillna("").astype(str)
     for column in out.columns:

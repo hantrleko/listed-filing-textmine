@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from pathlib import Path
 
+from filingtext import __version__
 from filingtext.clean import clean_body_report, normalize
 from filingtext.config import DEFAULT_SECTIONS, MIN_COMPARE_TOKENS, MIN_FOUND_CHARS
 from filingtext.extract import read_filing
@@ -25,7 +27,7 @@ def parse_path(job: dict) -> list[dict]:
     path = Path(job["path"])
     try:
         text = normalize(read_filing(path))
-        return parse_text(text, {**job, "path": str(path)})
+        return parse_text(text, {**job, "path": str(path), "source_sha1": _sha1_file(path)})
     except Exception as exc:
         log.exception("解析失败 %s", path)
         meta = parse_filename(path)
@@ -57,6 +59,8 @@ def parse_text(text: str, meta: dict) -> list[dict]:
     kind = meta.get("report_type") or filename_meta.get("kind") or ""
     form = sniff_form(text, market, str(kind))
     report_type = form if market == "US" else "annual"
+    filing_date = str(meta.get("filing_date") or "")
+    quarter = _fiscal_quarter(report_type)
     sections = meta.get("sections") or DEFAULT_SECTIONS[market]
     tone_override = meta.get("tone_override")
     found_sections = split_sections(text, market, form=form)
@@ -77,8 +81,11 @@ def parse_text(text: str, meta: dict) -> list[dict]:
                 "firm_name": firm,
                 "fiscal_year": year,
                 "report_type": report_type,
-                "filing_date": meta.get("filing_date") or "",
+                "filing_date": filing_date,
+                "available_date": filing_date,
+                "fiscal_quarter": quarter,
                 "source_url": meta.get("source_url") or "",
+                "source_sha1": meta.get("source_sha1") or _sha1_file(path),
                 "exchange": meta.get("exchange") or "",
                 "fetched_at": meta.get("fetched_at") or "",
                 "data_version": meta.get("data_version") or "",
@@ -200,10 +207,15 @@ def _base_record(meta: dict, section: str, found: int, error: str) -> dict:
         "text_path": "",
         "text_sha1": "",
         "filing_date": meta.get("filing_date") or "",
+        "available_date": meta.get("available_date") or meta.get("filing_date") or "",
+        "fiscal_quarter": meta.get("fiscal_quarter") if meta.get("fiscal_quarter") not in ("", None) else _fiscal_quarter(str(report_type)),
+        "pit_ready": int(bool(meta.get("available_date") or meta.get("filing_date"))),
         "source_url": meta.get("source_url") or "",
+        "source_sha1": meta.get("source_sha1") or "",
         "exchange": meta.get("exchange") or "",
         "fetched_at": meta.get("fetched_at") or "",
         "data_version": meta.get("data_version") or DICTIONARY_VERSION,
+        "app_version": __version__,
         "error": error,
     }
 
@@ -243,6 +255,23 @@ def _apply_quality(record: dict, raw_body: str, rank: int) -> None:
         return
     for key in _SUPPRESSED_RATIOS:
         record[key] = None
+
+
+def _sha1_file(path: Path) -> str:
+    if not path.is_file():
+        return ""
+    digest = hashlib.sha1()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _fiscal_quarter(report_type: str) -> int | None:
+    kind = (report_type or "").upper().replace("_", "-")
+    if kind in {"ANNUAL", "10-K", "10K"}:
+        return 4
+    return None
 
 
 def _empty_scores() -> dict:

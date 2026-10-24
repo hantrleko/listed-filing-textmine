@@ -25,9 +25,17 @@ pip install -e ".[finbert]"
 streamlit run app/dashboard.py
 ```
 
-左侧「我的面板」可以按代码和年份抓取，或上传已有 PDF / HTML。结果写到 `data/workspace/output/`，不会改样本案例里的数字。单次最多下载 8 份。
+左侧「我的面板」可以按代码和年份抓取，或上传已有 PDF / HTML。结果写到 `data/workspace/output/`，不会改样本案例里的数字。网页单次最多下载 8 份。更大的样本：
 
-长表是一章一行。`panel_wide.dta` 是一行一个公司—年度：`mda_*` 与 `risk_*` 分开，A 股 `stkcd` 为 6 位字符串。A 股的 `risk` 取 MD&A 中「可能面对的风险」到下一章之间的文字，没有这一标题时 `risk_found` 为 0。
+```powershell
+python scripts/build_factor_panel.py --codes 600519,600276,600887 --start 2022 --end 2024 --out data/factor_panel
+```
+
+`data/factor_panel/output/panel_factor.dta` 用因子工作台的主键：`ticker`、`fiscal_year`、`fiscal_quarter`、`available_date`。年报的 `fiscal_quarter` 为 4。`available_date` 是巨潮公告日，等于 `filing_date`，不是报告期期末。东财 `NOTICE_DATE` 和巨潮公告日可能差一天，对不上时不要改用 `fiscal_year` 单独合并。`pit_ready=0` 表示没有公告日。文本过短或边界可疑时，每千词和语气比率为空，计数仍在。
+
+源码：https://github.com/hantrleko/listed-filing-textmine 。词典版本写在 `data_version` / 因子表的 `dictionary_version`。
+
+长表是一章一行。`panel_wide.dta` 是一行一个公司—年度：`mda_*` 与 `risk_*` 分开，A 股 `stkcd` 为 6 位字符串。A 股的 `risk` 取 MD&A 中风险小节到下一个同级标题之间的文字，没有这一标题时 `risk_found` 为 0。
 
 美股抓取要在页面里填写联系邮箱，只保存在本次会话。
 

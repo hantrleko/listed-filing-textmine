@@ -7,11 +7,11 @@ import re
 from pathlib import Path
 
 from filingtext.clean import clean_body_report, normalize
-from filingtext.config import DEFAULT_SECTIONS
+from filingtext.config import DEFAULT_SECTIONS, MIN_COMPARE_TOKENS, MIN_FOUND_CHARS
 from filingtext.extract import read_filing
 from filingtext.features import score_document
 from filingtext.lexicon import DICTIONARY_VERSION
-from filingtext.sections import CN_BARE_TITLES, split_sections
+from filingtext.sections import CN_BARE_TITLES, leaks_sibling_heading, split_sections
 
 log = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ def parse_text(text: str, meta: dict) -> list[dict]:
             raw_body,
             skip_lines=CN_BARE_TITLES if market == "CN" else None,
         )
-        found = int(len(body) >= 40)
+        found = int(len(body) >= MIN_FOUND_CHARS)
         record = _base_record(
             {
                 "path": str(path),
@@ -100,6 +100,7 @@ def parse_text(text: str, meta: dict) -> list[dict]:
             record.update(score_document(body, market, tone_override=tone_override))
         else:
             record.update(_empty_scores())
+        _apply_quality(record, raw_body, section.rank if section else 9)
         rows.append(record)
     return rows
 
@@ -205,6 +206,43 @@ def _base_record(meta: dict, section: str, found: int, error: str) -> dict:
         "data_version": meta.get("data_version") or DICTIONARY_VERSION,
         "error": error,
     }
+
+
+_SUPPRESSED_RATIOS = (
+    "fog_index",
+    "avg_sentence_len",
+    "complex_word_ratio",
+    "tone_pos",
+    "tone_neg",
+    "tone_unc",
+    "tone_lit",
+    "tone_net",
+    "esg_per_k",
+    "esg_per_char_k",
+    "digital_per_k",
+    "digital_per_char_k",
+    "geopol_per_k",
+    "geopol_per_char_k",
+)
+
+
+def _apply_quality(record: dict, raw_body: str, rank: int) -> None:
+    flags: list[str] = []
+    if not record.get("found"):
+        flags.append("section_missing")
+    else:
+        if (record.get("n_tokens") or 0) < MIN_COMPARE_TOKENS:
+            flags.append("short_text")
+        if record.get("page_start") in (None, ""):
+            flags.append("location_missing")
+        if leaks_sibling_heading(raw_body, rank):
+            flags.append("boundary_suspect")
+    record["quality_flags"] = "|".join(flags)
+    record["comparable"] = int(bool(record.get("found")) and not any(flag in flags for flag in ("short_text", "boundary_suspect")))
+    if record["comparable"]:
+        return
+    for key in _SUPPRESSED_RATIOS:
+        record[key] = None
 
 
 def _empty_scores() -> dict:

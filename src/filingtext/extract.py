@@ -29,11 +29,15 @@ def extract_pdf(path: str | Path) -> str:
             height = float(page.height or 0)
             if words:
                 lines = _cluster_lines(words)
+                boxes = _table_bboxes(page)
                 body = []
                 for line in lines:
                     if height and (line["top"] < height * 0.06 or line["bottom"] > height * 0.94):
                         continue
-                    body.append(line["text"])
+                    text = line["text"]
+                    if _line_in_table(line["top"], line["bottom"], text, boxes):
+                        text = "[[TABLE]]" + text
+                    body.append(text)
             else:
                 body = (page.extract_text() or "").splitlines()
             pages.append([f"[[PAGE:{index}]]", *body])
@@ -41,6 +45,37 @@ def extract_pdf(path: str | Path) -> str:
         return normalize(drop_repeated_pages(pages))
     joined = "\n".join(line for page in pages for line in page if line.strip())
     return drop_repeated_lines(normalize(joined))
+
+
+def _table_bboxes(page) -> list[tuple[float, float, float, float]]:
+    try:
+        found = page.find_tables() or []
+    except Exception:
+        return []
+    boxes = []
+    for table in found:
+        box = getattr(table, "bbox", None)
+        if box and len(box) == 4:
+            boxes.append(tuple(float(value) for value in box))
+    return boxes
+
+
+def _line_in_table(top: float, bottom: float, text: str, boxes: list[tuple[float, float, float, float]], pad_top: float = 16.0) -> bool:
+    """行心落在表格框内就标成表格。框上方紧挨的表头也标上，完整叙述句不靠这个边缘规则删除。"""
+    if not boxes:
+        return False
+    mid = (top + bottom) / 2.0
+    prose = _cjk_count(text) >= 12 and bool(re.search(r"[。！？]", text))
+    for _x0, y0, _x1, y1 in boxes:
+        if y0 <= mid <= y1:
+            return True
+        if y0 - pad_top <= mid < y0 and not prose:
+            return True
+    return False
+
+
+def _cjk_count(text: str) -> int:
+    return len(re.findall(r"[\u4e00-\u9fff]", text))
 
 
 def _cluster_lines(words: list[dict], y_tol: float = 3.0) -> list[dict]:

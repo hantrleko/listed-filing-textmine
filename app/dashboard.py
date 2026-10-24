@@ -303,20 +303,30 @@ def _render_highlight(text, market, lang, section_name, selected, extra_terms, r
         "跨年漂移还可能来自模板或篇幅变化，不能直接读成风险升降。"
     )
     _render_source(row)
+    comparable = _row_comparable(row, scored)
+    if row and row.get("quality_flags"):
+        st.warning(_quality_message(str(row.get("quality_flags"))))
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("章节", section_name)
     c2.metric("内容词", f"{scored['n_tokens']}")
-    c3.metric("Fog", _fmt(scored["fog_index"]))
-    c4.metric("语气净值", _fmt(scored["tone_net"]))
+    c3.metric("中文类比可读性" if lang == "zh" else "Fog", _fmt(scored["fog_index"]) if comparable else "不适用")
+    c4.metric("语气净值", _fmt(scored["tone_net"]) if comparable else "不适用")
     c5, c6, c7 = st.columns(3)
-    c5.metric("ESG 词频/千词", _fmt(scored["esg_per_k"]))
-    c6.metric("数智化词频/千词", _fmt(scored["digital_per_k"]))
-    c7.metric("地缘词频/千词", _fmt(scored["geopol_per_k"]))
-    st.caption(
-        f"同时看三列：ESG 命中 {scored['esg_count']} 次、每千词 {_fmt(scored['esg_per_k'])}、每千字 {_fmt(scored['esg_per_char_k'])}；"
-        f"本章 {scored['n_chars']} 字。章节没切出来时这些值是空的，不是 0。"
-        "每千词和每千字是两套分母，用来看结论会不会被篇幅算法带偏。"
-    )
+    c5.metric("ESG 词频/千词", _fmt(scored["esg_per_k"]) if comparable else "不适用")
+    c6.metric("数智化词频/千词", _fmt(scored["digital_per_k"]) if comparable else "不适用")
+    c7.metric("地缘词频/千词", _fmt(scored["geopol_per_k"]) if comparable else "不适用")
+    if comparable:
+        st.caption(
+            f"同时看三列：ESG 命中 {scored['esg_count']} 次、每千词 {_fmt(scored['esg_per_k'])}、每千字 {_fmt(scored['esg_per_char_k'])}；"
+            f"本章 {scored['n_chars']} 字。章节没切出来时这些值是空的，不是 0。"
+            "每千词和每千字是两套分母，用来看结论会不会被篇幅算法带偏。"
+        )
+    else:
+        st.caption(
+            f"这一节 {scored['n_chars']} 字、{scored['n_tokens']} 个内容词。"
+            f"ESG 命中 {scored['esg_count']} 次，数智化 {scored['digital_count']} 次，地缘 {scored['geopol_count']} 次。"
+            "次数可以看，每千词和可读性不与正常章节比较。"
+        )
     if row and row.get("page_start"):
         st.caption(f"章节大约在第 {row['page_start']}–{row['page_end']} 页。页码是否进入分母，以删除记录为准。")
     if row and not row.get("source_url"):
@@ -472,6 +482,7 @@ def _render_method(anchors: list[dict], parsed: list[dict]) -> None:
     )
     st.markdown(
         "章节没有切出来时 found 为 0，宽表里对应格子是空的，不能把空值当成强度 0，也不能当成没有风险披露。"
+        "内容词少于 40 的章节会标成 short_text，每千词和可读性留空，不与正常章节放在一起比较。"
         "risk 会再找 MD&A 里面的「风险管理」「风险因素」等小节；找不到只说明标题没对上。"
         "「法律制裁」「制裁合规」「提升制裁风险防范」这类合规表述不计入地缘词；「经济制裁」「出口管制」仍计入。"
         "正文变长或变短会同时改变分子和分母，每千词升降不一定是同一类话变多。"
@@ -497,6 +508,8 @@ def _render_method(anchors: list[dict], parsed: list[dict]) -> None:
                         "page_end": item.get("page_end"),
                         "n_dropped_lines": item.get("n_dropped_lines"),
                         "n_tokens": item.get("n_tokens"),
+                        "quality_flags": item.get("quality_flags"),
+                        "comparable": item.get("comparable"),
                     }
                     for item in parsed
                 ]
@@ -699,8 +712,11 @@ def _read_cached(path_str: str, _mtime: float) -> str:
 def _render_memory_panel(frame: pd.DataFrame) -> None:
     show = frame[frame["found"] == 1] if "found" in frame.columns else frame
     mda = show[show["section"] == "mda"] if "section" in show.columns else show
-    if not mda.empty and mda["fiscal_year"].nunique() >= 2:
-        st.line_chart(mda.set_index("fiscal_year")[["esg_per_k", "digital_per_k", "geopol_per_k", "disclosure_drift"]])
+    chart_mda = _comparable_rows(mda)
+    if not chart_mda.empty and chart_mda["fiscal_year"].nunique() >= 2:
+        st.line_chart(chart_mda.set_index("fiscal_year")[["esg_per_k", "digital_per_k", "geopol_per_k", "disclosure_drift"]])
+        if len(chart_mda) < len(mda):
+            st.caption("文本过短或边界可疑的年份没有画进图里，避免和正常章节比每千词。")
         if mda["disclosure_drift"].isna().any():
             st.caption("披露漂移为空的年份没有上一年，不能把那一年读成变化。")
     st.dataframe(show, use_container_width=True, height=280)
@@ -790,6 +806,31 @@ def _split_terms(raw: str, lang: str) -> list[str]:
         if term:
             terms.append(term.lower() if lang == "en" else term)
     return terms
+
+
+def _row_comparable(row, scored: dict) -> bool:
+    if row is None:
+        return (scored.get("n_tokens") or 0) >= 40
+    if "comparable" in row:
+        return bool(int(row.get("comparable") or 0))
+    return "short_text" not in str(row.get("quality_flags") or "")
+
+
+def _quality_message(flags: str) -> str:
+    labels = {
+        "short_text": "文本过短，每千词、语气比率和可读性不与正常章节比较",
+        "boundary_suspect": "章节边界可疑，后面的标题可能被收了进来",
+        "location_missing": "这一节没有页码，句子暂时不能回到原页",
+        "section_missing": "没有切出这一节，空值不是强度 0",
+    }
+    parts = [labels.get(flag, flag) for flag in flags.split("|") if flag]
+    return "质量状态：" + "；".join(parts) + "。"
+
+
+def _comparable_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame is None or frame.empty or "comparable" not in frame.columns:
+        return frame
+    return frame[pd.to_numeric(frame["comparable"], errors="coerce").fillna(1).astype(int) == 1]
 
 
 def _fmt(value) -> str:

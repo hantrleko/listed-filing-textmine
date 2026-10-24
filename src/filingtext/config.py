@@ -25,6 +25,10 @@ SEC_SUBMISSIONS = "https://data.sec.gov/submissions/CIK{cik}.json"
 SEC_TICKERS = "https://www.sec.gov/files/company_tickers.json"
 SEC_ARCHIVES = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{filename}"
 
+# 少于此内容词数的章节仍保留计数，但每千词、语气比率和 Fog 不进入比较。
+MIN_COMPARE_TOKENS = 40
+MIN_FOUND_CHARS = 12
+
 DEFAULT_SECTIONS = {
     "CN": ["mda", "risk"],
     "US": ["mda", "risk"],
@@ -59,6 +63,8 @@ PANEL_COLUMNS = [
     "page_start",
     "page_end",
     "n_dropped_lines",
+    "quality_flags",
+    "comparable",
     "fog_index",
     "avg_sentence_len",
     "complex_word_ratio",

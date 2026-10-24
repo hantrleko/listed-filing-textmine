@@ -24,12 +24,24 @@ _NOISE = [
 ]
 
 CLEANING_RULES = [
-    "页码行（如 7 / 143、第 7 页）整行删除，不进入分词、词频分母和 Fog。",
-    "一行里有两列以上括号数字，或汉字很少却夹着数字的残句，按表格碎片删除。删除记录为 0 表示这些规则没有删行，不表示正文里一定没有表格。",
+    "页码行（如 7 / 143、第 7 页）整行删除，不进入分词、词频分母和可读性指标。[[PAGE:n]] 只用来定位。",
+    "表格按 PDF 版面框识别，行首标成 [[TABLE]] 后删除。带逗号或句号的叙述即使含有金额、名次，也不按数字个数删除。",
+    "版面框没有罩住时，仍删除括号数字列、几乎没有汉字的残句，以及「营业收入 / 毛利率 / 同比」这类拆开的表头。",
     "跨页重复的短页眉页脚删除。章节标题行保留，用来切边界。",
-    "PDF 顶栏 6% 和底栏 6% 在抽字时丢掉。抽字后插入 [[PAGE:n]]，计分前再拿掉，只用来记录章节落在哪些页。",
-    "指标只对清洗后的章节正文计算。原文留作对照，不参与词频。",
+    "PDF 顶栏 6% 和底栏 6% 在抽字时丢掉。指标只对清洗后的章节正文计算。原文和删除记录留作对照。",
 ]
+
+_HEADER_BITS = (
+    "营业收入",
+    "营业成本",
+    "毛利率",
+    "同比",
+    "本期数",
+    "上年同期",
+    "变动比例",
+    "销售费用",
+    "管理费用",
+)
 
 
 def normalize(text: str) -> str:
@@ -54,25 +66,53 @@ def is_page_mark(line: str) -> bool:
     return bool(_PAGE_MARK.match(line.strip()))
 
 
+def _cjk_count(text: str) -> int:
+    return len(re.findall(r"[\u4e00-\u9fff]", text))
+
+
+def is_narrative_line(line: str) -> bool:
+    """有标点的叙述句保留。不能因为一行里出现 501、884.27 就当成表格。"""
+    s = line.strip()
+    if s.startswith("[[TABLE]]"):
+        return False
+    cjk = _cjk_count(s)
+    if cjk >= 8 and re.search(r"[，。；：、！？]", s):
+        return True
+    return cjk >= 18
+
+
 def noise_reason(line: str) -> str | None:
     s = line.strip()
     if not s or is_page_mark(s):
         return None
+    if s.startswith("[[TABLE]]"):
+        return "表格区域"
     if len(s) <= 1:
         return "过短"
     if _PAGE_LINE.match(s):
         return "页码"
     if any(p.search(s) for p in _NOISE) and len(s) <= 40:
         return "页眉页脚或空行"
+    if is_narrative_line(s):
+        return None
     paren_numbers = re.findall(r"\(\s*-?\d[\d,]*\s*\)", s)
-    cjk = len(re.findall(r"[\u4e00-\u9fff]", s))
+    cjk = _cjk_count(s)
     if len(paren_numbers) >= 2 and cjk <= 24:
         return "表格行"
     if cjk <= 2 and re.search(r"\d", s) and len(s) <= 16:
         return "残句"
+    if _header_fragment(s):
+        return "表头"
     if is_table_noise(s):
         return "表格行"
     return None
+
+
+def _header_fragment(line: str) -> bool:
+    s = line.strip()
+    if len(s) > 48 or re.search(r"[。！？]", s):
+        return False
+    return sum(label in s for label in _HEADER_BITS) >= 2
 
 
 def is_noise_line(line: str) -> bool:
@@ -81,6 +121,8 @@ def is_noise_line(line: str) -> bool:
 
 def is_table_noise(line: str) -> bool:
     s = line.strip()
+    if s.startswith("[[TABLE]]") or is_narrative_line(s):
+        return False
     if len(s) < 8:
         return False
     digits = sum(ch.isdigit() for ch in s)
@@ -104,7 +146,7 @@ def drop_repeated_lines(text: str, min_repeat: int = 4, max_len: int = 60) -> st
     kept: list[str] = []
     for ln in lines:
         key = _key(ln)
-        if is_page_mark(ln):
+        if is_page_mark(ln) or ln.strip().startswith("[[TABLE]]"):
             kept.append(ln.strip())
             continue
         if key and freq[key] >= min_repeat and len(key) <= max_len and not _looks_like_header(ln):
@@ -123,7 +165,7 @@ def drop_repeated_pages(pages: list[list[str]], rate: float = 0.4) -> str:
     kept: list[str] = []
     for lines in pages:
         for ln in lines:
-            if is_page_mark(ln):
+            if is_page_mark(ln) or ln.strip().startswith("[[TABLE]]"):
                 kept.append(ln.strip())
                 continue
             key = _key(ln)
@@ -179,7 +221,8 @@ def clean_body_report(text: str, skip_lines: set[str] | None = None) -> tuple[st
         reason = noise_reason(line)
         if reason:
             dropped_n += 1
-            drops.append({"page": page, "reason": reason, "line": line[:120]})
+            shown = line.removeprefix("[[TABLE]]")
+            drops.append({"page": page, "reason": reason, "line": shown[:120]})
             continue
         if first_page is None:
             first_page = page

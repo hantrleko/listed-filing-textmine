@@ -239,7 +239,7 @@ def score_document(
 
 def apply_corpus(records: list[dict]) -> list[dict]:
     """在全样本上补 TF-IDF 和上一年度相似度。会删掉 token_counts / term_hits。"""
-    scored = [r for r in records if r.get("found") and r.get("token_counts")]
+    scored = [r for r in records if r.get("found") and r.get("token_counts") and r.get("comparable", 1)]
     identifiable = [r for r in scored if r.get("ticker") and r.get("fiscal_year")]
     _mark_duplicates(identifiable)
     unique = [r for r in identifiable if not r.get("is_duplicate")]

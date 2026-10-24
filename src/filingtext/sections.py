@@ -1,7 +1,9 @@
 """年报 / 10-K / 10-Q 章节切分。
 
 硬边界是「第X节」和 Item 标题。目录行（点线或行末页码）不作为正文起点。
+软标题（如「(四)可能面对的风险」）在下一个同级或更高级标题处结束，不把「(五)其他」收进去。
 同一章节多次出现时，保留优先级更高、正文跨度更长的那一次。
+章节正文会补上标题之前最近的 [[PAGE:n]]，避免小节从页中切开后丢失页码。
 """
 
 from __future__ import annotations
@@ -86,6 +88,91 @@ _CN_NUMBERED = re.compile(r"^\d{1,2}\s+")
 def _is_hard(head: str) -> bool:
     return bool(_CN_HARD.search(head) or _CN_NUMBERED.match(head.strip()))
 
+
+def _outline_rank(raw: str) -> int | None:
+    """标题层级。数字越小越高。目录行和数字堆不是标题。"""
+    s = raw.replace("\u3000", " ").strip()
+    if not s or s.startswith("[[PAGE:") or s.startswith("[[TABLE]]"):
+        return None
+    toc = _CN_TOC.match(s)
+    if toc and (toc.group("page") or toc.group("page2")):
+        return None
+    if _CN_HARD.match(s):
+        return 0
+    if re.match(r"^[一二三四五六七八九十]+、", s):
+        return 1 if _titleish(s) else None
+    if re.match(r"^[（(][一二三四五六七八九十]+[)）]", s):
+        return 2 if _titleish(s) else None
+    decimal = re.match(r"^(\d{1,2}(?:\.\d+)+)\s*\S", s)
+    if decimal:
+        return 3 + decimal.group(1).count(".") if _titleish(s) else None
+    if re.match(r"^\d{1,2}[、.．]\s*\S", s) or re.match(r"^\d{1,2}\s+\S", s):
+        return 3 if _titleish(s) else None
+    return None
+
+
+def _titleish(line: str) -> bool:
+    tail = _CN_ENUM.sub("", line).strip(" ：:.")
+    if not tail:
+        return True
+    cjk = len(re.findall(r"[\u4e00-\u9fff]", tail))
+    digits = sum(ch.isdigit() for ch in tail)
+    if cjk < 2 and digits > 0:
+        return False
+    if digits > cjk and cjk < 4:
+        return False
+    return True
+
+
+def _anchor_rank(line: str, hard: bool) -> int:
+    rank = _outline_rank(line.strip())
+    if rank is not None:
+        return rank
+    return 0 if hard else 9
+
+
+def _outline_points(text: str) -> list[tuple[int, int]]:
+    points: list[tuple[int, int]] = []
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        rank = _outline_rank(line)
+        if rank is not None:
+            points.append((offset, rank))
+        offset += len(line)
+    return points
+
+
+def _section_end(anchor: Anchor, text_len: int, boundaries: list[int], outline: list[tuple[int, int]]) -> int:
+    hard_end = next((pos for pos in boundaries if pos > anchor.start), text_len)
+    if anchor.hard:
+        return hard_end
+    sibling = next((pos for pos, rank in outline if pos > anchor.start and rank <= anchor.rank), None)
+    if sibling is None:
+        return hard_end
+    return min(sibling, hard_end)
+
+
+def _page_before(text: str, pos: int) -> int | None:
+    last = None
+    for matched in re.finditer(r"\[\[PAGE:(\d+)\]\]", text):
+        if matched.start() <= pos:
+            last = int(matched.group(1))
+        else:
+            break
+    return last
+
+
+def leaks_sibling_heading(body: str, rank: int) -> bool:
+    """正文里如果还留着同级或更高级标题，边界就不可信。"""
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("[[PAGE:") or stripped.startswith("[[TABLE]]"):
+            continue
+        found = _outline_rank(stripped)
+        if found is not None and found <= rank:
+            return True
+    return False
+
 _US_ITEM = re.compile(
     r"^[ \t]*item[ \t]+(?P<num>1a|1b|1c|7a|9a|9b|9c|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15)\b"
     r"[ \t]*[\.\:\-–—]*[ \t]*(?P<rest>.*)$",
@@ -103,6 +190,7 @@ class Anchor:
     header: str
     toc: bool
     hard: bool
+    rank: int = 9
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -116,6 +204,7 @@ class Section:
     text: str
     start: int
     end: int
+    rank: int = 9
 
     def as_dict(self) -> dict:
         data = asdict(self)
@@ -128,10 +217,14 @@ def split_sections(text: str, market: str, form: str | None = None) -> dict[str,
     anchors = find_anchors(text, market, form=form)
     chosen, boundaries = _choose(anchors)
     chosen.sort(key=lambda a: a.start)
+    outline = _outline_points(text)
     out: dict[str, Section] = {}
     for anchor in chosen:
-        end = next((pos for pos in boundaries if pos > anchor.start), len(text))
+        end = _section_end(anchor, len(text), boundaries, outline)
         body = text[anchor.content_start : end].strip()
+        page = _page_before(text, anchor.start)
+        if page and not body.startswith("[[PAGE:"):
+            body = f"[[PAGE:{page}]]\n{body}" if body else f"[[PAGE:{page}]]"
         out[anchor.section] = Section(
             key=anchor.section,
             title=anchor.title,
@@ -139,6 +232,7 @@ def split_sections(text: str, market: str, form: str | None = None) -> dict[str,
             text=body,
             start=anchor.content_start,
             end=end,
+            rank=anchor.rank,
         )
     return out
 
@@ -214,6 +308,7 @@ def _anchors_cn(text: str) -> list[Anchor]:
                     header=line.strip()[:80],
                     toc=toc,
                     hard=hard,
+                    rank=_anchor_rank(line, hard),
                 )
             )
         offset += len(line)
@@ -286,6 +381,7 @@ def _anchors_us(text: str, form: str | None) -> list[Anchor]:
                     header=line.strip()[:120],
                     toc=toc,
                     hard=True,
+                    rank=0,
                 )
             )
         offset += len(line)

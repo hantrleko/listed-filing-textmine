@@ -191,7 +191,7 @@ def _render_case_intro(name: str, market: str, frame: pd.DataFrame, year: int, d
         show = show[show["found"] == 1]
     mda = show[show["section"] == "mda"]
     if len(mda) >= 2:
-        from app.ui.charts import render_freq_tone_trends
+        from ui.charts import render_freq_tone_trends
 
         render_freq_tone_trends(_comparable_rows(mda))
         st.write(_describe_case(show))
@@ -722,7 +722,7 @@ def _render_memory_panel(frame: pd.DataFrame) -> None:
     mda = show[show["section"] == "mda"] if "section" in show.columns else show
     chart_mda = _comparable_rows(mda)
     if not chart_mda.empty and chart_mda["fiscal_year"].nunique() >= 2:
-        from app.ui.charts import render_freq_tone_trends
+        from ui.charts import render_freq_tone_trends
 
         render_freq_tone_trends(chart_mda)
         if chart_mda["disclosure_drift"].notna().any() and chart_mda["fiscal_year"].nunique() >= 2:

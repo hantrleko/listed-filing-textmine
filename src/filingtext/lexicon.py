@@ -11,7 +11,7 @@ from filingtext.config import LEXICON_DIR
 
 log = logging.getLogger(__name__)
 
-DICTIONARY_VERSION = "seed-2026-10.2"
+DICTIONARY_VERSION = "seed-2026-10.5"
 
 TOPIC_NAMES = ("esg", "digital", "geopol")
 TONE_NAMES = ("pos", "neg", "unc", "lit")

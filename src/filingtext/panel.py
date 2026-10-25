@@ -60,7 +60,7 @@ def to_frame(records: list[dict]) -> pd.DataFrame:
         "geopol_per_char_k",
     ]:
         frame[column] = pd.to_numeric(frame[column], errors="coerce")
-    for column in ("doc_id", "market", "ticker", "stkcd", "cik", "firm_name", "report_type", "form", "section", "source_path", "text_path", "raw_text_path", "clean_log_path", "text_sha1", "filing_date", "available_date", "source_url", "source_sha1", "exchange", "fetched_at", "data_version", "app_version", "quality_flags", "fog_method", "tone_method", "error"):
+    for column in ("doc_id", "market", "ticker", "stkcd", "cik", "firm_name", "report_type", "form", "section", "source_path", "text_path", "raw_text_path", "clean_log_path", "text_sha1", "filing_date", "announce_date", "available_date", "section_title", "match_method", "source_url", "source_sha1", "exchange", "fetched_at", "data_version", "app_version", "quality_flags", "fog_method", "tone_method", "error"):
         frame[column] = frame[column].fillna("").astype(str)
     return frame
 
@@ -172,7 +172,7 @@ def to_wide(frame: pd.DataFrame) -> pd.DataFrame:
 def to_factor(frame: pd.DataFrame) -> pd.DataFrame:
     """因子工作台主键：ticker、fiscal_year、fiscal_quarter、available_date。
 
-    available_date 等于公告日。fiscal_year 只表示报告期，不能单独拿来做时点对齐。
+    available_date 为公告日 T+1。fiscal_year 只表示报告期，不能单独拿来做时点对齐。
     """
     wide = to_wide(frame).rename(columns={"data_version": "dictionary_version"})
     for column in FACTOR_COLUMNS:

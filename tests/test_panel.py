@@ -110,7 +110,8 @@ def test_factor_key_uses_announcement_date_not_fiscal_year_end(tmp_path: Path):
     )
     row = rows[0]
     assert row["fiscal_year"] == 2023
-    assert row["available_date"] == "2024-04-02"
+    assert row["announce_date"] == "2024-04-02"
+    assert row["available_date"] == "2024-04-03"
     assert row["available_date"] != "2023-12-31"
     assert row["fiscal_quarter"] == 4
     assert row["pit_ready"] == 1
@@ -118,5 +119,5 @@ def test_factor_key_uses_announcement_date_not_fiscal_year_end(tmp_path: Path):
     factor = to_factor(to_frame(rows))
     assert factor.loc[0, "ticker"] == "600519"
     assert int(factor.loc[0, "fiscal_quarter"]) == 4
-    assert factor.loc[0, "available_date"] == "2024-04-02"
+    assert factor.loc[0, "available_date"] == "2024-04-03"
     assert "mda_digital_per_k" in factor.columns

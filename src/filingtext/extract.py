@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
 from filingtext.clean import collapse_cjk_spacing, drop_repeated_lines, drop_repeated_pages, normalize
+from filingtext.config import DATA_DIR
+
+EXTRACT_CACHE_DIR = DATA_DIR / "cache" / "extract"
 
 
 def read_filing(path: str | Path) -> str:
@@ -20,6 +24,18 @@ def read_filing(path: str | Path) -> str:
 
 
 def extract_pdf(path: str | Path) -> str:
+    path = Path(path)
+    digest = hashlib.sha1(path.read_bytes()).hexdigest()
+    cache = EXTRACT_CACHE_DIR / f"{digest}.txt"
+    if cache.is_file():
+        return cache.read_text(encoding="utf-8")
+    text = _extract_pdf_impl(path)
+    EXTRACT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache.write_text(text, encoding="utf-8")
+    return text
+
+
+def _extract_pdf_impl(path: Path) -> str:
     import pdfplumber
 
     pages: list[list[str]] = []

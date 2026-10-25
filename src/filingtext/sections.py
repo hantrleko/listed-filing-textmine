@@ -36,6 +36,11 @@ CN_TITLES: list[tuple[str, int, str]] = [
     ("risk", 3, "主要风险及应对"),
     ("risk", 4, "风险管理"),
     ("risk", 4, "风险因素"),
+    ("risk", 2, "公司面临的风险"),
+    ("risk", 2, "未来潜在的风险和挑战"),
+    ("risk", 1, "可能面对的风险及应对措施"),
+    ("risk", 1, "公司可能面对的风险及应对措施"),
+    ("risk", 1, "公司可能面对的风险"),
 ]
 
 US_10K_ITEMS = {
@@ -78,6 +83,8 @@ CN_BARE_TITLES = set(_CN_TITLE_MAP)
 _CN_TOC = re.compile(
     r"^(?P<head>.*?)(?:[ \t]*[\.·．…]{2,}[ \t]*(?P<page>\d{1,4})|[ \t]{2,}(?P<page2>\d{1,4}))\s*$"
 )
+_CN_TOC_LEADING = re.compile(r"^(?P<page>\d{1,4})\s+(?P<head>.+)$")
+_RISK_POINTER = re.compile(r"敬请投资者|详见本报告|请参阅|详见第[一二三四五六七八九十\d]+节")
 _CN_ENUM = re.compile(
     r"^(?:第[一二三四五六七八九十百零〇0-9]{1,3}[章节]|[（(][一二三四五六七八九十]+[)）][、.．]?|[一二三四五六七八九十]+、|\d{1,2}(?:\.\d+)+\s*|\d{1,2}[、.．]|\d{1,2}\s+)\s*"
 )
@@ -191,6 +198,8 @@ class Anchor:
     toc: bool
     hard: bool
     rank: int = 9
+    toc_page: int | None = None
+    match_method: str = "body"
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -205,6 +214,7 @@ class Section:
     start: int
     end: int
     rank: int = 9
+    match_method: str = "body"
 
     def as_dict(self) -> dict:
         data = asdict(self)
@@ -221,8 +231,12 @@ def split_sections(text: str, market: str, form: str | None = None) -> dict[str,
     out: dict[str, Section] = {}
     for anchor in chosen:
         end = _section_end(anchor, len(text), boundaries, outline)
-        body = text[anchor.content_start : end].strip()
-        page = _page_before(text, anchor.start)
+        if anchor.toc and anchor.toc_page:
+            body, content_start = _body_from_toc_page(text, anchor.toc_page, end)
+        else:
+            content_start = anchor.content_start
+            body = text[content_start:end].strip()
+        page = anchor.toc_page or _page_before(text, anchor.start)
         if page and not body.startswith("[[PAGE:"):
             body = f"[[PAGE:{page}]]\n{body}" if body else f"[[PAGE:{page}]]"
         out[anchor.section] = Section(
@@ -230,9 +244,10 @@ def split_sections(text: str, market: str, form: str | None = None) -> dict[str,
             title=anchor.title,
             header=anchor.header,
             text=body,
-            start=anchor.content_start,
+            start=content_start,
             end=end,
             rank=anchor.rank,
+            match_method=anchor.match_method,
         )
     return out
 
@@ -250,45 +265,95 @@ def find_anchors(text: str, market: str, form: str | None = None) -> list[Anchor
     raise ValueError(f"未知市场 {market}")
 
 
-def _best_anchor(group: list[Anchor], points: list[int]) -> Anchor:
-    def span(anchor: Anchor) -> int:
-        end = next((pos for pos in points if pos > anchor.start), 10**12)
-        return end - anchor.start
+def _body_from_toc_page(text: str, page: int, end: int) -> tuple[str, int]:
+    marker = f"[[PAGE:{page}]]"
+    pos = text.find(marker)
+    if pos < 0:
+        return text[:0].strip(), 0
+    slice_end = min(end, len(text))
+    return text[pos:slice_end].strip(), pos
 
-    return sorted(group, key=lambda a: (a.priority, 0 if a.hard else 1, -span(a)))[0]
+
+def _anchor_span(anchor: Anchor, points: list[int]) -> int:
+    end = next((pos for pos in points if pos > anchor.start), 10**12)
+    return end - anchor.start
+
+
+def _best_anchor(group: list[Anchor], points: list[int], section: str = "") -> Anchor:
+    filtered = [anchor for anchor in group if not _is_weak_risk_anchor(anchor, section)]
+    pool = filtered or group
+    if section == "mda":
+        deep = [a for a in pool if a.rank >= 3 and not a.hard and not a.toc]
+        shallow = [a for a in pool if a not in deep]
+        if shallow:
+            pool = shallow
+
+    def key(anchor: Anchor) -> tuple:
+        return (
+            anchor.priority,
+            anchor.rank,
+            0 if anchor.hard else 1,
+            0 if not anchor.toc else 2,
+            -_anchor_span(anchor, points),
+        )
+
+    return sorted(pool, key=key)[0]
+
+
+def _is_weak_risk_anchor(anchor: Anchor, section: str) -> bool:
+    if section != "risk":
+        return False
+    if anchor.priority <= 2 and not anchor.toc:
+        return False
+    if anchor.start > 12000:
+        return False
+    if anchor.priority >= 4 and anchor.start < 10000:
+        return True
+    return False
+
+
+def _section_pool(body: list[Anchor], toc: list[Anchor], section: str) -> list[Anchor]:
+    body_hits = [a for a in body if a.section == section]
+    if body_hits:
+        return body_hits
+    toc_hits = [a for a in toc if a.section == section]
+    for anchor in toc_hits:
+        anchor.match_method = "toc"
+    return toc_hits
 
 
 def _choose(anchors: list[Anchor]) -> tuple[list[Anchor], list[int]]:
     body = [a for a in anchors if not a.toc]
-    pool = body or anchors
-    hard = [a for a in pool if a.hard]
-    selection_points = sorted(a.start for a in (hard or pool))
-    grouped: dict[str, list[Anchor]] = {}
-    for anchor in pool:
-        grouped.setdefault(anchor.section, []).append(anchor)
-    chosen = [
-        _best_anchor(group, selection_points)
-        for section, group in grouped.items()
-        if section != "risk"
-    ]
+    toc = [a for a in anchors if a.toc]
+    for anchor in body:
+        anchor.match_method = "body"
+    hard = [a for a in body if a.hard]
+    selection_points = sorted(a.start for a in (hard or body or toc))
+    sections = sorted({a.section for a in anchors})
+    grouped = {section: _section_pool(body, toc, section) for section in sections}
+    chosen = [_best_anchor(group, selection_points, section=section) for section, group in grouped.items() if section != "risk"]
     slice_points = sorted(a.start for a in hard) if hard else sorted(a.start for a in chosen)
     mda = next((anchor for anchor in chosen if anchor.section == "mda"), None)
     mda_end = next((pos for pos in slice_points if mda and pos > mda.start), 10**12)
     if "risk" in grouped:
         group = grouped["risk"]
-        inside = [
-            anchor
-            for anchor in group
-            if mda and mda.content_start <= anchor.start < mda_end
-        ]
+        strong = [a for a in group if a.priority <= 2 and not _risk_pointer_anchor(a)]
+        inside = [anchor for anchor in (strong or group) if mda and mda.content_start <= anchor.start < mda_end]
         dedicated = [anchor for anchor in inside if anchor.priority <= 2]
-        outside_dedicated = [anchor for anchor in group if anchor.priority <= 2 and anchor not in inside]
-        picked = _best_anchor(dedicated or inside or outside_dedicated or group, selection_points)
+        outside_dedicated = [anchor for anchor in (strong or group) if anchor.priority <= 2 and anchor not in inside]
+        picked = _best_anchor(dedicated or inside or outside_dedicated or strong or group, selection_points, section="risk")
         chosen.append(picked)
         embedded = bool(mda and mda.content_start <= picked.start < mda_end and not picked.hard)
         if not embedded and not hard:
             slice_points = sorted([*slice_points, picked.start])
     return chosen, slice_points
+
+
+def _risk_pointer_anchor(anchor: Anchor) -> bool:
+    if anchor.priority <= 1:
+        return False
+    header = anchor.header or ""
+    return bool(_RISK_POINTER.search(header)) and len(header) < 120
 
 
 def _anchors_cn(text: str) -> list[Anchor]:
@@ -297,7 +362,7 @@ def _anchors_cn(text: str) -> list[Anchor]:
     for line in text.splitlines(keepends=True):
         parsed = _parse_cn_line(line)
         if parsed is not None:
-            section, priority, title, toc, hard, consumed = parsed
+            section, priority, title, toc, hard, consumed, toc_page = parsed
             anchors.append(
                 Anchor(
                     section=section,
@@ -309,6 +374,7 @@ def _anchors_cn(text: str) -> list[Anchor]:
                     toc=toc,
                     hard=hard,
                     rank=_anchor_rank(line, hard),
+                    toc_page=toc_page,
                 )
             )
         offset += len(line)
@@ -323,10 +389,20 @@ def _content_start(line: str, offset: int, consumed: int) -> int:
     return offset + leading + consumed
 
 
-def _parse_cn_line(line: str) -> tuple[str, int, str, bool, bool, int] | None:
+def _parse_cn_line(line: str) -> tuple[str, int, str, bool, bool, int, int | None] | None:
     raw = line.replace("\u3000", " ").strip()
     if not raw:
         return None
+    leading = _CN_TOC_LEADING.match(raw)
+    if leading:
+        head = leading.group("head").strip()
+        looks_like_toc = ".." in raw or re.search(r"[\.·…]{2,}", raw) or _CN_HARD.search(head) or re.search(r"[章节]", head)
+        if looks_like_toc:
+            title = _CN_ENUM.sub("", head).strip(" ：:.")
+            hit = _CN_TITLE_MAP.get(title)
+            if hit is not None:
+                section, priority = hit
+                return section, priority, title, True, _is_hard(head), len(raw), int(leading.group("page"))
     matched = _CN_TOC.match(raw)
     if matched and (matched.group("page") or matched.group("page2")):
         head = matched.group("head").strip()
@@ -334,14 +410,20 @@ def _parse_cn_line(line: str) -> tuple[str, int, str, bool, bool, int] | None:
         hit = _CN_TITLE_MAP.get(title)
         if hit is not None:
             section, priority = hit
-            return section, priority, title, True, _is_hard(head), len(raw)
+            page_raw = matched.group("page") or matched.group("page2")
+            page = int(page_raw) if page_raw else None
+            return section, priority, title, True, _is_hard(head), len(raw), page
     if len(raw) <= 80:
         title = _CN_ENUM.sub("", raw).strip(" ：:.")
         hit = _CN_TITLE_MAP.get(title)
         if hit is not None:
             section, priority = hit
-            return section, priority, title, False, _is_hard(raw), len(raw)
-    return _cn_prefix(raw)
+            return section, priority, title, False, _is_hard(raw), len(raw), None
+    parsed = _cn_prefix(raw)
+    if parsed is None:
+        return None
+    section, priority, title, toc, hard, consumed = parsed
+    return section, priority, title, toc, hard, consumed, None
 
 
 def _cn_prefix(head: str) -> tuple[str, int, str, bool, bool, int] | None:
@@ -359,6 +441,8 @@ def _cn_prefix(head: str) -> tuple[str, int, str, bool, bool, int] | None:
         while after < len(head) and head[after] in " \t：:":
             after += 1
         section, priority = _CN_TITLE_MAP[title]
+        if section == "mda" and len(title) < 8 and not _is_hard(head[:after]):
+            continue
         return section, priority, title, False, _is_hard(head[:after]), after
     return None
 

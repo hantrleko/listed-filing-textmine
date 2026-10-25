@@ -13,7 +13,9 @@ from filingtext.config import DEFAULT_SECTIONS, MIN_COMPARE_TOKENS, MIN_FOUND_CH
 from filingtext.extract import read_filing
 from filingtext.features import score_document
 from filingtext.lexicon import DICTIONARY_VERSION
-from filingtext.sections import CN_BARE_TITLES, leaks_sibling_heading, split_sections
+from filingtext.pit import pit_dates
+from filingtext.quality import apply_record_quality
+from filingtext.sections import CN_BARE_TITLES, split_sections
 
 log = logging.getLogger(__name__)
 
@@ -60,6 +62,11 @@ def parse_text(text: str, meta: dict) -> list[dict]:
     form = sniff_form(text, market, str(kind))
     report_type = form if market == "US" else "annual"
     filing_date = str(meta.get("filing_date") or "")
+    announce_date, available_date = pit_dates(filing_date)
+    if meta.get("available_date"):
+        available_date = str(meta.get("available_date"))
+    if meta.get("announce_date"):
+        announce_date = str(meta.get("announce_date"))
     quarter = _fiscal_quarter(report_type)
     sections = meta.get("sections") or DEFAULT_SECTIONS[market]
     tone_override = meta.get("tone_override")
@@ -82,7 +89,8 @@ def parse_text(text: str, meta: dict) -> list[dict]:
                 "fiscal_year": year,
                 "report_type": report_type,
                 "filing_date": filing_date,
-                "available_date": filing_date,
+                "announce_date": announce_date,
+                "available_date": available_date,
                 "fiscal_quarter": quarter,
                 "source_url": meta.get("source_url") or "",
                 "source_sha1": meta.get("source_sha1") or _sha1_file(path),
@@ -100,6 +108,8 @@ def parse_text(text: str, meta: dict) -> list[dict]:
         record["page_end"] = provenance["page_end"]
         record["n_dropped_lines"] = provenance["n_dropped_lines"]
         record["section_header"] = section.header if section else ""
+        record["section_title"] = section.title if section else ""
+        record["match_method"] = section.match_method if section else ""
         record["section_raw"] = raw_body
         record["clean_log"] = drops
         record["section_text"] = body if found else ""
@@ -107,7 +117,7 @@ def parse_text(text: str, meta: dict) -> list[dict]:
             record.update(score_document(body, market, tone_override=tone_override))
         else:
             record.update(_empty_scores())
-        _apply_quality(record, raw_body, section.rank if section else 9)
+        apply_record_quality(record, raw_body, section.rank if section else 9, cleaned_body=body)
         rows.append(record)
     return rows
 
@@ -207,8 +217,11 @@ def _base_record(meta: dict, section: str, found: int, error: str) -> dict:
         "text_path": "",
         "text_sha1": "",
         "filing_date": meta.get("filing_date") or "",
+        "announce_date": meta.get("announce_date") or meta.get("filing_date") or "",
         "available_date": meta.get("available_date") or meta.get("filing_date") or "",
         "fiscal_quarter": meta.get("fiscal_quarter") if meta.get("fiscal_quarter") not in ("", None) else _fiscal_quarter(str(report_type)),
+        "section_title": "",
+        "match_method": "",
         "pit_ready": int(bool(meta.get("available_date") or meta.get("filing_date"))),
         "source_url": meta.get("source_url") or "",
         "source_sha1": meta.get("source_sha1") or "",
@@ -218,43 +231,6 @@ def _base_record(meta: dict, section: str, found: int, error: str) -> dict:
         "app_version": __version__,
         "error": error,
     }
-
-
-_SUPPRESSED_RATIOS = (
-    "fog_index",
-    "avg_sentence_len",
-    "complex_word_ratio",
-    "tone_pos",
-    "tone_neg",
-    "tone_unc",
-    "tone_lit",
-    "tone_net",
-    "esg_per_k",
-    "esg_per_char_k",
-    "digital_per_k",
-    "digital_per_char_k",
-    "geopol_per_k",
-    "geopol_per_char_k",
-)
-
-
-def _apply_quality(record: dict, raw_body: str, rank: int) -> None:
-    flags: list[str] = []
-    if not record.get("found"):
-        flags.append("section_missing")
-    else:
-        if (record.get("n_tokens") or 0) < MIN_COMPARE_TOKENS:
-            flags.append("short_text")
-        if record.get("page_start") in (None, ""):
-            flags.append("location_missing")
-        if leaks_sibling_heading(raw_body, rank):
-            flags.append("boundary_suspect")
-    record["quality_flags"] = "|".join(flags)
-    record["comparable"] = int(bool(record.get("found")) and not any(flag in flags for flag in ("short_text", "boundary_suspect")))
-    if record["comparable"]:
-        return
-    for key in _SUPPRESSED_RATIOS:
-        record[key] = None
 
 
 def _sha1_file(path: Path) -> str:

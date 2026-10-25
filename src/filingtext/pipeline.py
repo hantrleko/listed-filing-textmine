@@ -6,14 +6,19 @@ import argparse
 import hashlib
 import json
 import logging
+import uuid
 from concurrent.futures import ProcessPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 
+from filingtext import __version__
+from filingtext.clean import CLEANING_RULES
 from filingtext.config import OUTPUT_DIR, TEXT_DIR
 from filingtext.features import apply_corpus, finbert_tone
-from filingtext.lexicon import load_loughran_mcdonald
+from filingtext.lexicon import DICTIONARY_VERSION, load_loughran_mcdonald
 from filingtext.panel import export_panel, summarize, to_frame
 from filingtext.parse_job import parse_path
+from filingtext.quality import apply_yoy_quality
 
 log = logging.getLogger(__name__)
 
@@ -91,42 +96,73 @@ def run(
     limit: int = 0,
     text_dir: str | Path | None = None,
     on_event=None,
+    run_id: str | None = None,
 ) -> dict:
+    run_id = run_id or _new_run_id()
     tone_override = load_loughran_mcdonald(lm_path) if lm_path else None
     jobs = collect_jobs(input_dir, market=market, sections=sections, manifest=manifest, tone_override=tone_override, limit=limit)
+
+    def emit(stage: str, detail: str, state: str) -> None:
+        if not on_event:
+            return
+        on_event({"run_id": run_id, "stage": stage, "detail": detail, "state": state})
+
     if not jobs:
         raise FileNotFoundError(f"没有可解析的 PDF/HTML/TXT：{input_dir}")
+    emit("解析", f"共 {len(jobs)} 份文件", "run")
     batches = []
     if workers <= 1:
         for job in jobs:
             name = Path(job["path"]).name
-            if on_event:
-                on_event({"stage": "章节切分", "detail": name, "state": "run"})
+            emit("章节切分", name, "run")
             try:
                 batch = parse_path(job)
             except Exception as exc:
-                if on_event:
-                    on_event({"stage": "章节切分", "detail": f"{name}：{exc}", "state": "fail"})
+                emit("章节切分", f"{name}：{exc}", "fail")
                 continue
             found = sum(1 for row in batch if row.get("found"))
-            if on_event:
-                state = "ok" if found else "fail"
-                on_event({"stage": "章节切分", "detail": f"{name}，有效章节 {found}", "state": state})
+            emit("章节切分", f"{name}，有效章节 {found}", "ok" if found else "fail")
             batches.append(batch)
     else:
         with ProcessPoolExecutor(max_workers=workers) as pool:
             batches = list(pool.map(parse_path, jobs))
-    if on_event:
-        on_event({"stage": "指标计算", "detail": "词频、TF-IDF 与同比", "state": "run"})
+    emit("指标计算", "词频、TF-IDF 与同比", "run")
     records = [row for batch in batches for row in batch]
     if use_finbert:
         _attach_finbert(records)
+    emit("清洗落盘", "正文、原文与删除日志", "run")
     _persist_text(records, Path(text_dir) if text_dir else TEXT_DIR)
     apply_corpus(records)
+    apply_yoy_quality(records)
     frame = to_frame(records)
+    emit("导出", "parquet / dta / duckdb / 因子表", "run")
     paths = export_panel(frame, output_dir)
     paths["summary"] = summarize(frame)
+    paths["run_id"] = run_id
+    _write_run_manifest(Path(output_dir), run_id, records, paths, len(jobs))
+    emit("完成", f"有效章节 {paths['summary']['n_found']}/{paths['summary']['n_rows']}", "ok")
     return paths
+
+
+def _new_run_id() -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"{stamp}-{uuid.uuid4().hex[:8]}"
+
+
+def _write_run_manifest(output_dir: Path, run_id: str, records: list[dict], paths: dict, n_jobs: int) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "run_id": run_id,
+        "app_version": __version__,
+        "dictionary_version": DICTIONARY_VERSION,
+        "cleaning_rules": CLEANING_RULES,
+        "n_jobs": n_jobs,
+        "n_records": len(records),
+        "outputs": {key: str(value) for key, value in paths.items() if key != "summary"},
+    }
+    dest = output_dir / f"run_{run_id}.json"
+    dest.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    paths["run_manifest"] = str(dest)
 
 
 def _attach_finbert(records: list[dict]) -> None:

@@ -86,6 +86,9 @@ def noise_reason(line: str) -> str | None:
     if not s or is_page_mark(s):
         return None
     if s.startswith("[[TABLE]]"):
+        bare = s.removeprefix("[[TABLE]]").strip()
+        if is_narrative_line(bare):
+            return "表格内叙述"
         return "表格区域"
     if len(s) <= 1:
         return "过短"

@@ -76,13 +76,14 @@ def _render_source(row: dict | None) -> None:
     st.markdown(
         f"**来源** {row.get('firm_name') or ''} {row.get('stkcd') or row.get('ticker') or ''} · "
         f"报告期 {row.get('fiscal_year') or ''} 年{row.get('report_type') or ''} · "
-        f"公告日 / 可用日 {row.get('available_date') or row.get('filing_date') or '缺失'} · "
+        f"公告日 {row.get('announce_date') or row.get('filing_date') or '缺失'} · "
+        f"可用日 {row.get('available_date') or '缺失'} · "
         f"{row.get('exchange') or ''} · {pages}"
     )
     if row.get("source_url"):
         st.markdown(f"[打开原始申报文件]({row['source_url']})")
     st.caption(
-        "回归对齐用 available_date（公告日），不要把 fiscal_year 当成信息已经公开的日期。"
+        "回归对齐用 available_date（公告日 T+1，与因子工作台 NOTICE_DATE 一致）。不要把 fiscal_year 当成信息已公开日期。"
         f" 词典 {row.get('data_version') or DICTIONARY_VERSION} · 程序 {row.get('app_version') or __version__}"
         f" · 原文 SHA1 {str(row.get('source_sha1') or '')[:12] or '无'}"
     )
@@ -190,8 +191,9 @@ def _render_case_intro(name: str, market: str, frame: pd.DataFrame, year: int, d
         show = show[show["found"] == 1]
     mda = show[show["section"] == "mda"]
     if len(mda) >= 2:
-        chart = mda.set_index("fiscal_year")[["esg_per_k", "digital_per_k", "geopol_per_k", "tone_net"]]
-        st.line_chart(chart)
+        from app.ui.charts import render_freq_tone_trends
+
+        render_freq_tone_trends(_comparable_rows(mda))
         st.write(_describe_case(show))
     _render_drift(docs, year, market, "mda")
 
@@ -473,7 +475,7 @@ def _prior_workspace_text(row: dict) -> str:
 def _render_method(anchors: list[dict], parsed: list[dict]) -> None:
     st.markdown(f"**词典版本** {DICTIONARY_VERSION}。这是可编辑种子词，不是 Loughran-McDonald 官方全表。")
     st.markdown(
-        "强度分母是清洗后的内容词数。命中删除规则的页码行和表格行不进入分词、分母和 Fog。"
+        "强度分母是清洗后的内容词数。命中删除规则的页码行和表格行不进入分词、分母和可读性指标。"
         "中文用 jieba，词典里的词会先加进去。同一词表内长词优先，所以「碳排放权」不会再拆出「碳排放」。"
         "英文按词边界匹配，loss 不会算进 losses。"
         "不同词表可以同时命中同一个词，高亮时只标更长的那一次。"
@@ -495,8 +497,8 @@ def _render_method(anchors: list[dict], parsed: list[dict]) -> None:
         "跨年漂移是用词分布的差异，模板句、目录残留或篇幅变化都会让它变大，不能直接解读为风险上升或下降。"
     )
     st.markdown(
-        "中文 Fog 是类比式：0.4 ×（词数/句数 + 100 × 四字及以上词占比）。"
-        "它不是英文 Gunning Fog，不能和英文 Fog 直接比高低。"
+        "中文类比可读性：0.4 ×（词数/句数 + 100 × 四字及以上词占比）。"
+        "它不是英文 Gunning Fog，不能与英文 Fog 直接比高低。"
     )
     for rule in CLEANING_RULES:
         st.write(rule)
@@ -720,7 +722,12 @@ def _render_memory_panel(frame: pd.DataFrame) -> None:
     mda = show[show["section"] == "mda"] if "section" in show.columns else show
     chart_mda = _comparable_rows(mda)
     if not chart_mda.empty and chart_mda["fiscal_year"].nunique() >= 2:
-        st.line_chart(chart_mda.set_index("fiscal_year")[["esg_per_k", "digital_per_k", "geopol_per_k", "disclosure_drift"]])
+        from app.ui.charts import render_freq_tone_trends
+
+        render_freq_tone_trends(chart_mda)
+        if chart_mda["disclosure_drift"].notna().any() and chart_mda["fiscal_year"].nunique() >= 2:
+            st.caption("披露漂移")
+            st.line_chart(chart_mda.set_index("fiscal_year")[["disclosure_drift"]])
         if len(chart_mda) < len(mda):
             st.caption("文本过短或边界可疑的年份没有画进图里，避免和正常章节比每千词。")
         if mda["disclosure_drift"].isna().any():
@@ -742,7 +749,7 @@ def _render_panel(out_dir: Path = OUTPUT_DIR, fallback: pd.DataFrame | None = No
     if out_dir == OUTPUT_DIR:
         st.caption("下面是同一批合成样本的公司-年度面板，和上面的案例用的是同一套数字。")
     else:
-        st.caption("长表是一章一行。宽表是一行一个公司—年度。因子表用 ticker、fiscal_year、fiscal_quarter、available_date，可并到因子工作台；available_date 是公告日。")
+        st.caption("长表是一章一行。宽表是一行一个公司—年度。因子表主键 ticker、fiscal_year、fiscal_quarter、available_date；available_date 为公告日 T+1。")
     frame = pd.read_parquet(parquet)
     st.dataframe(frame, use_container_width=True, height=280)
     _download_row(out_dir)

@@ -2,7 +2,7 @@
 
 网页单次最多 8 份。这个脚本不设这个上限，请自行控制巨潮请求频率。
 主键是 ticker、fiscal_year、fiscal_quarter、available_date。
-available_date 是公告日，不是报告期期末。
+available_date 是公告日 T+1（与因子工作台 NOTICE_DATE 对齐），不是报告期期末。
 """
 
 from __future__ import annotations

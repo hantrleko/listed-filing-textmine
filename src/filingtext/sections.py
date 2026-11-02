@@ -149,14 +149,59 @@ def _outline_points(text: str) -> list[tuple[int, int]]:
     return points
 
 
-def _section_end(anchor: Anchor, text_len: int, boundaries: list[int], outline: list[tuple[int, int]]) -> int:
+def _section_end(anchor: Anchor, text: str, boundaries: list[int], outline: list[tuple[int, int]]) -> int:
+    text_len = len(text)
     hard_end = next((pos for pos in boundaries if pos > anchor.start), text_len)
+    header = anchor.header.replace("[[TABLE]]", "").strip()
+    decimal = re.match(r"^(\d{1,2})\.\d+", header)
+    if decimal and not anchor.hard and anchor.section == "mda":
+        chapter_end = _decimal_chapter_end(text, anchor.start, decimal.group(1))
+        return min(chapter_end, hard_end, _foreign_chapter_cut(text, anchor.start))
     if anchor.hard:
-        return hard_end
+        return min(hard_end, _foreign_chapter_cut(text, anchor.start))
     sibling = next((pos for pos, rank in outline if pos > anchor.start and rank <= anchor.rank), None)
-    if sibling is None:
-        return hard_end
-    return min(sibling, hard_end)
+    end = hard_end if sibling is None else min(sibling, hard_end)
+    return min(end, _foreign_chapter_cut(text, anchor.start))
+
+
+def _foreign_chapter_cut(text: str, start: int) -> int:
+    offset = start
+    first = True
+    for line in text[start:].splitlines(keepends=True):
+        if first:
+            first = False
+            offset += len(line)
+            continue
+        stripped = line.strip()
+        if (
+            stripped
+            and len(stripped) <= 48
+            and _outline_rank(stripped) is not None
+            and any(name in stripped for name in _FOREIGN_CHAPTER)
+        ):
+            return offset
+        offset += len(line)
+    return len(text)
+
+
+def _decimal_chapter_end(text: str, start: int, chapter: str) -> int:
+    """8.1 开头且没有章标题时，收到下一章（9. 或「一、」）为止，不在 8.2 截断。"""
+    offset = start
+    first = True
+    for line in text[start:].splitlines(keepends=True):
+        if first:
+            first = False
+            offset += len(line)
+            continue
+        stripped = line.replace("[[TABLE]]", "").strip()
+        rank = _outline_rank(stripped)
+        if rank is not None and rank <= 1:
+            return offset
+        numbered = re.match(r"^(\d{1,2})(?:\.\d+)?(?:[、.．\s]|$)", stripped)
+        if numbered and numbered.group(1) != chapter and rank is not None:
+            return offset
+        offset += len(line)
+    return len(text)
 
 
 def _page_before(text: str, pos: int) -> int | None:
@@ -169,14 +214,84 @@ def _page_before(text: str, pos: int) -> int | None:
     return last
 
 
+def _cjk_len(text: str) -> int:
+    return len(re.findall(r"[\u4e00-\u9fff]", text))
+
+
+def _slice_pdf_pages(text: str, start_page: int, end_page: int | None) -> tuple[str, int]:
+    marker = f"[[PAGE:{start_page}]]"
+    pos = text.find(marker)
+    if pos < 0:
+        return "", 0
+    if end_page and end_page > start_page:
+        end_pos = text.find(f"[[PAGE:{end_page}]]", pos + len(marker))
+        if end_pos > pos:
+            return text[pos:end_pos].strip(), pos
+    return text[pos:].strip(), pos
+
+
+def _toc_slice(text: str, anchors: list[Anchor], section: str) -> tuple[str, int, Anchor] | None:
+    """目录页码和 PDF 物理页经常差 1–2 页。试几个偏移，取汉字最多且不像审计责任段的那一截。"""
+    tocs = [a for a in anchors if a.toc and a.section == section and a.toc_page]
+    if not tocs:
+        return None
+    tocs.sort(key=lambda a: (a.priority, 0 if a.hard else 1, a.toc_page or 10**9))
+    anchor = tocs[0]
+    later = sorted(a.toc_page for a in anchors if a.toc and a.toc_page and a.toc_page > (anchor.toc_page or 0))
+    next_printed = later[0] if later else None
+    best_text = ""
+    best_pos = 0
+    best_score = -1
+    for offset in range(-1, 5):
+        start_pdf = (anchor.toc_page or 0) + offset
+        if start_pdf < 1:
+            continue
+        end_pdf = next_printed + offset if next_printed else None
+        chunk, pos = _slice_pdf_pages(text, start_pdf, end_pdf)
+        score = _cjk_len(chunk[:12000])
+        if anchor.title and anchor.title in chunk[:2500]:
+            score += 4000
+        if "财务报表的责任" in chunk[:800]:
+            score -= 10000
+        if score > best_score:
+            best_score = score
+            best_text = chunk
+            best_pos = pos
+    if best_score < 200:
+        return None
+    anchor.match_method = "toc"
+    return best_text, best_pos, anchor
+
+
+_FOREIGN_CHAPTER = (
+    "公司治理",
+    "财务报告",
+    "财务会计报告",
+    "重要事项",
+    "股份变动",
+    "环境和社会责任",
+    "环境与社会责任",
+    "公司简介和主要财务指标",
+)
+
+
 def leaks_sibling_heading(body: str, rank: int) -> bool:
-    """正文里如果还留着同级或更高级标题，边界就不可信。"""
+    """混入其他章的硬标题才算边界可疑。章内的「一、」「（一）」不算。"""
+    del rank
     for line in body.splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("[[PAGE:") or stripped.startswith("[[TABLE]]"):
             continue
+        if len(stripped) > 48:
+            continue
         found = _outline_rank(stripped)
-        if found is not None and found <= rank:
+        if found is None:
+            continue
+        if any(name in stripped for name in _FOREIGN_CHAPTER):
+            return True
+        if found == 0 and _CN_HARD.search(stripped) and not any(
+            key in stripped for key in ("管理层讨论", "讨论与分析", "风险")
+        ):
             return True
     return False
 
@@ -230,15 +345,23 @@ def split_sections(text: str, market: str, form: str | None = None) -> dict[str,
     outline = _outline_points(text)
     out: dict[str, Section] = {}
     for anchor in chosen:
-        end = _section_end(anchor, len(text), boundaries, outline)
+        end = _section_end(anchor, text, boundaries, outline)
         if anchor.toc and anchor.toc_page:
-            body, content_start = _body_from_toc_page(text, anchor.toc_page, end)
+            rescued = _toc_slice(text, anchors, anchor.section)
+            if rescued is None:
+                body, content_start = "", anchor.start
+            else:
+                body, content_start, anchor = rescued
         else:
             content_start = anchor.content_start
             body = text[content_start:end].strip()
+        if anchor.section == "mda":
+            rescued = _toc_slice(text, anchors, "mda")
+            if rescued is not None and _cjk_len(rescued[0]) > max(800, _cjk_len(body) * 2):
+                body, content_start, anchor = rescued
         page = anchor.toc_page or _page_before(text, anchor.start)
-        if page and not body.startswith("[[PAGE:"):
-            body = f"[[PAGE:{page}]]\n{body}" if body else f"[[PAGE:{page}]]"
+        if page and body and not body.startswith("[[PAGE:"):
+            body = f"[[PAGE:{page}]]\n{body}"
         out[anchor.section] = Section(
             key=anchor.section,
             title=anchor.title,

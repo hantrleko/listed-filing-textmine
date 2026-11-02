@@ -39,6 +39,8 @@ def test_audit_scores_need_human_labels():
 
 
 def test_cninfo_helpers():
+    from filingtext.sources import filing_role_from_title
+
     assert cninfo_column("600519") == "sse"
     assert cninfo_column("000001") == "szse"
     assert cninfo_column("430001") == "bj"
@@ -46,6 +48,8 @@ def test_cninfo_helpers():
     assert is_full_annual_title("2023年年度报告")
     assert not is_full_annual_title("2023年年度报告摘要")
     assert not is_full_annual_title("2023年年度报告（英文版）")
+    assert filing_role_from_title("2023年年度报告") == "initial"
+    assert filing_role_from_title("2023年年度报告（更新后）") == "restated"
 
 
 def test_edgar_url():

@@ -132,11 +132,14 @@ def run(
         _attach_finbert(records)
     emit("清洗落盘", "正文、原文与删除日志", "run")
     _persist_text(records, Path(text_dir) if text_dir else TEXT_DIR)
-    apply_corpus(records)
     apply_yoy_quality(records)
+    apply_corpus(records)
     frame = to_frame(records)
     emit("导出", "parquet / dta / duckdb / 因子表", "run")
     paths = export_panel(frame, output_dir)
+    from filingtext.store import sync_filings
+
+    paths["store"] = str(sync_filings(frame, Path(output_dir) / "filings.duckdb"))
     paths["summary"] = summarize(frame)
     paths["run_id"] = run_id
     _write_run_manifest(Path(output_dir), run_id, records, paths, len(jobs))

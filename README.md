@@ -33,7 +33,7 @@ python scripts/build_factor_panel.py --codes 600519,600276,600887 --start 2022 -
 
 `data/factor_panel/output/panel_factor.dta` 用因子工作台的主键：`ticker`、`fiscal_year`、`fiscal_quarter`、`available_date`。年报的 `fiscal_quarter` 为 4。`announce_date` / `filing_date` 为巨潮公告日；`available_date` 为公告日 T+1，与东财 `NOTICE_DATE` 对齐。不要用 `fiscal_year` 单独做时点对齐。`pit_ready=0` 表示没有公告日。文本过短、边界可疑、指引句或同比长度跳变时，每千词和语气比率为空，计数仍在。
 
-版本路线：**0.3** 章节与 PIT 可信；**0.4** 分阶段运行与证据包；**0.5** CI、抽取缓存与看板图表拆分。当前程序版本见 `app_version`。
+版本路线见 `CHANGELOG.md`。当前是 **0.8.0**：目录回切、质量门禁、修订稿分流、DuckDB 增量库，以及 `scripts/link_factor_workbench.py` 与因子工作台按 `available_date` 对齐。
 
 源码：https://github.com/hantrleko/listed-filing-textmine 。词典版本写在 `data_version` / 因子表的 `dictionary_version`。
 

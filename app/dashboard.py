@@ -370,6 +370,7 @@ def _render_evidence(cleaned: str, raw: str, lexicon: str, lang: str) -> None:
     for item in rows:
         page = f"第 {item['page']} 页 · " if item.get("page") else ""
         st.write(f"{page}{item['sentence']}")
+    st.caption("紧挨在词前面的「不 / 未 / 没有 / 不存在」不计作命中。合规语境里的「法律制裁」也不计入地缘词。")
 
 
 def _render_clean_compare(row, market: str, section_name: str) -> None:
@@ -790,6 +791,36 @@ def _download_row(out_dir: Path) -> None:
             data = path.read_bytes()
             mime = "application/octet-stream"
         column.download_button(label, data, file_name=name, mime=mime, key=f"dl-{out_dir.name}-{name}")
+    _download_evidence_zip(out_dir)
+
+
+def _download_evidence_zip(out_dir: Path) -> None:
+    import io
+    import zipfile
+
+    names = [
+        "panel.parquet",
+        "panel_factor.parquet",
+        "panel_factor.dta",
+    ]
+    runs = sorted(out_dir.glob("run_*.json"))
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name in names:
+            path = out_dir / name
+            if path.exists():
+                archive.write(path, arcname=name)
+        if runs:
+            archive.write(runs[-1], arcname=runs[-1].name)
+    if payload.tell() == 0:
+        return
+    st.download_button(
+        "下载本次运行证据包",
+        payload.getvalue(),
+        file_name="filingtext_evidence.zip",
+        mime="application/zip",
+        key=f"dl-zip-{out_dir.name}",
+    )
 
 
 def _html(text: str, spans: list[tuple[int, int, str]]) -> str:

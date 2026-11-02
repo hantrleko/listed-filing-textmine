@@ -76,6 +76,9 @@ def is_narrative_line(line: str) -> bool:
     if s.startswith("[[TABLE]]"):
         return False
     cjk = _cjk_count(s)
+    numbers = re.findall(r"\d[\d,]*(?:\.\d+)?", s)
+    if len(numbers) >= 3 and cjk <= 20 and not re.search(r"[。！？]", s):
+        return False
     if cjk >= 8 and re.search(r"[，。；：、！？]", s):
         return True
     return cjk >= 18
@@ -131,6 +134,8 @@ def is_table_noise(line: str) -> bool:
     digits = sum(ch.isdigit() for ch in s)
     numbers = re.findall(r"\d+(?:\.\d+)?", s)
     if digits / len(s) > 0.35:
+        return True
+    if len(numbers) >= 3 and _cjk_count(s) <= 20 and not re.search(r"[。！？]", s):
         return True
     if len(numbers) >= 4 and digits / len(s) > 0.22:
         return True

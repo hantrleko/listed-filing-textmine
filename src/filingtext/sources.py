@@ -30,6 +30,13 @@ def cninfo_column(code: str) -> str:
     return "szse"
 
 
+def filing_role_from_title(title: str) -> str:
+    """修订稿不能覆盖首次披露，否则事件研究的可用日会被改掉。"""
+    if any(key in title for key in ("修订", "更新后", "更正后")):
+        return "restated"
+    return "initial"
+
+
 def is_full_annual_title(title: str) -> bool:
     if any(bad in title for bad in ("摘要", "英文", "取消", "更正公告", "修订说明")):
         return False
@@ -176,7 +183,12 @@ def download_cninfo(
             adjunct = ann.get("adjunctUrl") or ""
             if not adjunct:
                 continue
-            dest = out / f"{code}_{year}_annual.pdf"
+            role = filing_role_from_title(title)
+            suffix = "_restated" if role == "restated" else ""
+            dest = out / f"{code}_{year}_annual{suffix}.pdf"
+            if role == "initial" and dest.exists():
+                _emit(on_event, "下载", f"{dest.name} 已有首次披露，跳过", "ok")
+                continue
             _emit(on_event, "下载", dest.name)
             try:
                 _stream(session, cninfo_pdf_url(adjunct), dest)
@@ -197,6 +209,7 @@ def download_cninfo(
                     "filing_date": filing_date_from_ms(ann.get("announcementTime")),
                     "source_url": cninfo_pdf_url(adjunct),
                     "exchange": exchange_for_code(code, "CN"),
+                    "filing_role": role,
                     "fetched_at": _now_iso(),
                     "data_version": "",
                 },

@@ -30,7 +30,11 @@ def test_tone_and_fog_direction():
     assert positive["fog_method"] == "gunning_fog"
 
 
-def test_chinese_digital_and_fog_method():
+def test_chinese_negation_drops_topic_hit():
+    from filingtext.features import count_active_terms
+
+    assert count_active_terms("公司不存在经济制裁敞口。", ["经济制裁", "制裁"], "zh").get("经济制裁", 0) == 0
+    assert count_active_terms("公司受到经济制裁。", ["经济制裁"], "zh").get("经济制裁", 0) == 1
     low = score_document("报告期内公司营业收入保持增长，盈利能力稳健，信息系统运行平稳。", "CN")
     high = score_document(
         "公司推进数字化转型，试点人工智能、机器学习和工业互联网，并建设数据中台。",

@@ -148,3 +148,47 @@ def test_cn_risk_subsection_stays_inside_mda():
 def test_table_noise():
     assert is_table_noise("12.1 13.2 14.3 15.4 16.5 17.6")
     assert not is_table_noise("公司营业收入保持增长，盈利能力稳健。")
+    assert is_table_noise("减：手续费及佣金支出 18,534 16,493 2,041 12.4")
+
+
+def test_decimal_subsections_merge_until_next_chapter():
+    text = """8.1 讨论与分析
+2022 年全球通胀仍处于历史高位，主要发达经济体持续加息，公司经营环境复杂。
+8.2 财务报表分析
+营业收入保持增长，盈利能力稳健，董事会认为经营正常，主业继续稳步推进。
+9.1 公司治理
+治理结构稳定规范运作，这段不应进入管理层讨论正文内容。
+"""
+    mda = split_sections(text, "CN")["mda"].text
+    assert "全球通胀" in mda
+    assert "营业收入保持增长" in mda
+    assert "治理结构稳定" not in mda
+
+
+def test_toc_page_offset_finds_body_when_cover_shifts_pages():
+    body = "报告期内公司营业收入保持增长，盈利能力稳健，并推进绿色金融与数字化转型，董事会认为经营正常。" * 8
+    text = (
+        "[[PAGE:2]]\n"
+        "19 第三章管理层讨论与分析\n"
+        "40 第四章公司治理\n"
+        "[[PAGE:20]]\n"
+        "3.1 总体经营情况\n"
+        f"{body}\n"
+        "[[PAGE:41]]\n"
+        "第四章 公司治理\n"
+        "治理结构稳定规范运作，这段不应进入管理层讨论正文内容。\n"
+    )
+    mda = split_sections(text, "CN")["mda"]
+    assert mda.match_method == "toc"
+    assert "绿色金融" in mda.text
+    assert "治理结构稳定" not in mda.text
+
+
+def test_internal_enumerated_heading_is_not_a_boundary_leak():
+    from filingtext.sections import leaks_sibling_heading
+
+    body = "一、环境与展望\n经营环境复杂但主业稳定。\n二、财务报表分析\n营业收入保持增长。\n"
+    assert leaks_sibling_heading(body, 1) is False
+    leaked = "第四节 公司治理\n治理结构稳定。\n"
+    assert leaks_sibling_heading(leaked, 1) is True
+

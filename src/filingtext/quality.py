@@ -56,6 +56,7 @@ def apply_record_quality(record: dict, raw_body: str, rank: int, cleaned_body: s
 
 
 def apply_yoy_quality(records: list[dict]) -> None:
+    """只把明显过短的年份标成跳变。正常的长章节不因为同组里有一年残缺而被丢掉。"""
     groups: dict[tuple[str, str], list[dict]] = {}
     for row in records:
         if row.get("found") and (row.get("n_tokens") or 0) > 0:
@@ -63,18 +64,17 @@ def apply_yoy_quality(records: list[dict]) -> None:
     for rows in groups.values():
         if len(rows) < 2:
             continue
-        tokens = [float(r["n_tokens"]) for r in rows]
-        med = statistics.median(tokens)
-        if med <= 0:
+        long = [float(r["n_tokens"]) for r in rows if float(r["n_tokens"]) >= 1000]
+        if not long:
             continue
+        base = statistics.median(long)
         for row in rows:
-            ratio = float(row["n_tokens"]) / med
-            if 0.3 <= ratio <= 3.0:
+            tokens = float(row["n_tokens"])
+            if tokens >= 1000 or tokens / base >= 0.25:
                 continue
             flags = [part for part in (row.get("quality_flags") or "").split("|") if part]
-            if "yoy_length_jump" in flags:
-                continue
-            flags.append("yoy_length_jump")
+            if "yoy_length_jump" not in flags:
+                flags.append("yoy_length_jump")
             row["quality_flags"] = "|".join(flags)
             if row.get("comparable"):
                 row["comparable"] = 0

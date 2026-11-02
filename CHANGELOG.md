@@ -1,13 +1,18 @@
 # Changelog
 
+## 0.8.0
+
+- 目录页按物理页偏移回切正文；只有小数小节时合并到下一章。
+- 章内「一、」不再标成边界可疑。同比长度只剔除过短年份，并且发生在语料统计之前。
+- 无句号的多数字行按表格删除。主题词前的否定不再计入。
+- 修订稿另存，不覆盖首次披露。多次解析可写入 `filings.duckdb`。
+- 看板年份不再带千分位，图例改为中文，可下载证据包。
+- `scripts/link_factor_workbench.py` 用 `available_date` 对齐因子工作台，并在有价格时计算公告后窗口收益。
+
 ## 0.5.0
 
-- PIT：`announce_date` 与 `available_date`（公告日 T+1）对齐因子工作台。
-- 章节：目录页码兜底、风险标题扩展、弱锚点与指引句过滤、MD&A 深小节降权。
-- 质量：`pointer_text`、`yoy_length_jump`；面板字段 `section_title`、`match_method`。
-- 管线：`run_id` 与 `run_*.json` 证据清单；YoY 长度质检；PDF 抽取 SHA1 缓存。
-- 看板：频次与语气分图；术语统一为「中文类比可读性」。
-- CI：GitHub Actions（pytest + ruff）。
+- PIT 的 `available_date` 为公告日 T+1，运行清单、抽取缓存和 CI。
+- 章节目录兜底、风险标题、质量标记和看板中文可读性用语。
 
 ## 0.2.3
 

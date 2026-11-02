@@ -173,10 +173,28 @@ def _blocked_geopol(text: str, start: int, term: str) -> bool:
 def _count_geopol(text: str, terms: list[str], lang: str) -> dict[str, int]:
     counts: dict[str, int] = {}
     for start, _end, term in find_spans(text, terms, lang):
-        if _blocked_geopol(text, start, term):
+        if _topic_negated(text, start, lang) or _blocked_geopol(text, start, term):
             continue
         counts[term] = counts.get(term, 0) + 1
     return counts
+
+
+_TOPIC_NEGATION = re.compile(r"(不存在|没有|并未|尚未|并非|难以|未|不|没)$")
+
+
+def _topic_negated(text: str, start: int, lang: str) -> bool:
+    if lang == "zh":
+        return bool(_TOPIC_NEGATION.search(text[max(0, start - 8) : start]))
+    return _negated(text, start, lang)
+
+
+def count_active_terms(text: str, terms: list[str], lang: str) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    for start, _end, term in find_spans(text, terms, lang):
+        if _topic_negated(text, start, lang):
+            continue
+        counts[term] += 1
+    return dict(counts)
 
 
 def _per_k(count: int, n_tokens: int) -> float | None:
@@ -212,7 +230,7 @@ def score_document(
         if name == "geopol":
             hits = _count_geopol(text, topics[name], lang)
         else:
-            hits = count_terms(text, topics[name], lang)
+            hits = count_active_terms(text, topics[name], lang)
         term_hits[name] = hits
         total = sum(hits.values())
         metrics[f"{name}_count"] = total

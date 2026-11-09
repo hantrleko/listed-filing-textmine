@@ -72,6 +72,7 @@ PANEL_COLUMNS = [
     "page_end",
     "n_dropped_lines",
     "quality_flags",
+    "section_status",
     "comparable",
     "fog_index",
     "avg_sentence_len",

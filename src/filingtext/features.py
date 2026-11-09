@@ -157,17 +157,23 @@ def _tone_counts(text: str, tones: dict[str, list[str]], lang: str) -> dict[str,
     }
 
 
-def _blocked_geopol(text: str, start: int, term: str) -> bool:
-    """合规语境里的「法律制裁」「制裁合规」「提升制裁风险防范」不计入地缘风险。"""
+def _geopol_block_reason(text: str, start: int, term: str) -> str | None:
+    """合规语境里的「制裁」不计入地缘风险，并给出排除原因。"""
     if term != "制裁":
-        return False
+        return None
     end = start + len(term)
     prefix = text[max(0, start - 8) : end]
     if re.search(r"(法律|纪律|内部|行政|合规|刑事)制裁", prefix):
-        return True
+        return "法律制裁"
     if text[end : end + 2] == "合规":
-        return True
-    return text[max(0, start - 2) : start] in {"强化", "提升", "加强", "完善"}
+        return "制裁合规"
+    if text[max(0, start - 2) : start] in {"强化", "提升", "加强", "完善"}:
+        return "提升制裁"
+    return None
+
+
+def _blocked_geopol(text: str, start: int, term: str) -> bool:
+    return _geopol_block_reason(text, start, term) is not None
 
 
 def _count_geopol(text: str, terms: list[str], lang: str) -> dict[str, int]:
@@ -394,28 +400,67 @@ def disclosure_diff(previous: str, current: str, market: str, limit: int = 6) ->
     }
 
 
+def _sentence_bounds(text: str) -> list[int]:
+    bounds = [0]
+    for match in re.finditer(r"[。！？!?\n]", text):
+        bounds.append(match.end())
+    if bounds[-1] != len(text):
+        bounds.append(len(text))
+    return bounds
+
+
+def _sentence_at(text: str, start: int, end: int, bounds: list[int]) -> str:
+    left = max(item for item in bounds if item <= start)
+    right = min(item for item in bounds if item >= end)
+    return text[left:right].strip()
+
+
 def evidence_sentences(cleaned: str, raw: str, terms: list[str], lang: str, limit: int = 6) -> list[dict]:
     """把词典命中收成句子，并尽量标出原文里的页码。"""
     spans = find_spans(cleaned, terms, lang)
     if not spans:
         return []
-    bounds = [0]
-    for match in re.finditer(r"[。！？!?\n]", cleaned):
-        bounds.append(match.end())
-    if bounds[-1] != len(cleaned):
-        bounds.append(len(cleaned))
+    bounds = _sentence_bounds(cleaned)
     rows = []
     seen = set()
     for start, end, term in spans:
-        left = max(item for item in bounds if item <= start)
-        right = min(item for item in bounds if item >= end)
-        sentence = cleaned[left:right].strip()
+        sentence = _sentence_at(cleaned, start, end, bounds)
         if not sentence or sentence in seen:
             continue
         seen.add(sentence)
         rows.append({"sentence": sentence, "term": term, "page": _page_of_snippet(raw, sentence)})
         if len(rows) >= limit:
             break
+    return rows
+
+
+def term_decisions(cleaned: str, raw: str, terms: list[str], lang: str, geopol: bool = False) -> list[dict]:
+    """每一处命中都保留。排除行写明原因，不设条数上限。"""
+    spans = find_spans(cleaned, terms, lang)
+    if not spans:
+        return []
+    bounds = _sentence_bounds(cleaned)
+    rows = []
+    for start, end, term in spans:
+        sentence = _sentence_at(cleaned, start, end, bounds)
+        if not sentence:
+            continue
+        block = _geopol_block_reason(cleaned, start, term) if geopol else None
+        if _topic_negated(cleaned, start, lang):
+            status, reason = "排除", "否定"
+        elif block:
+            status, reason = "排除", block
+        else:
+            status, reason = "计入", ""
+        rows.append(
+            {
+                "term": term,
+                "sentence": sentence,
+                "page": _page_of_snippet(raw, sentence),
+                "status": status,
+                "reason": reason,
+            }
+        )
     return rows
 
 

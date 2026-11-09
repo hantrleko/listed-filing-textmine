@@ -45,6 +45,25 @@ def test_chinese_negation_drops_topic_hit():
     assert high["fog_index"] > 0
 
 
+def test_term_decisions_mark_negation_and_legal_sanction():
+    from filingtext.features import term_decisions
+
+    text = "公司不存在经济制裁敞口。公司受到经济制裁。公司避免法律制裁。公司建设制裁合规制度。公司提升制裁风险防范。"
+    raw = "[[PAGE:21]]\n" + text
+    rows = term_decisions(raw.replace("[[PAGE:21]]\n", ""), raw, ["经济制裁", "制裁"], "zh", geopol=True)
+    by_sentence = {row["sentence"]: row for row in rows}
+    negated = by_sentence["公司不存在经济制裁敞口。"]
+    counted = by_sentence["公司受到经济制裁。"]
+    legal = by_sentence["公司避免法律制裁。"]
+    compliance = by_sentence["公司建设制裁合规制度。"]
+    strengthened = by_sentence["公司提升制裁风险防范。"]
+    assert negated["status"] == "排除" and negated["reason"] == "否定" and negated["page"] == 21
+    assert counted["status"] == "计入" and counted["reason"] == "" and counted["term"] == "经济制裁"
+    assert legal["status"] == "排除" and legal["reason"] == "法律制裁" and legal["term"] == "制裁"
+    assert compliance["status"] == "排除" and compliance["reason"] == "制裁合规"
+    assert strengthened["status"] == "排除" and strengthened["reason"] == "提升制裁"
+
+
 def test_evidence_sentence_keeps_page():
     from filingtext.features import evidence_sentences
 

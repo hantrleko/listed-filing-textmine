@@ -22,12 +22,13 @@ from filingtext.features import (
     ZH_STOP,
     apply_corpus,
     disclosure_diff,
-    evidence_sentences,
+    term_decisions,
     highlight_spans,
     score_document,
     tokenize,
 )
 from filingtext.lexicon import DICTIONARY_VERSION, tone_lexicons, topic_lexicons
+from filingtext.panel import regression_readiness
 from filingtext.parse_job import parse_text
 from filingtext.samples import SAMPLE_DOCS
 from filingtext.sections import diagnose_anchors, split_sections
@@ -362,15 +363,18 @@ def _render_highlight(text, market, lang, section_name, selected, extra_terms, r
 
 def _render_evidence(cleaned: str, raw: str, lexicon: str, lang: str) -> None:
     terms = topic_lexicons()[lang].get(lexicon, [])
-    rows = evidence_sentences(cleaned, raw, terms, lang)
-    st.markdown(f"**{LABELS.get(lexicon, lexicon)} 的原文句子**")
+    rows = term_decisions(cleaned, raw, terms, lang, geopol=lexicon == "geopol")
+    st.markdown(f"**{LABELS.get(lexicon, lexicon)} 的命中与排除**")
     if not rows:
         st.info("当前词典在清洗后正文里没有命中。这只说明没有匹配到种子词。")
         return
-    for item in rows:
-        page = f"第 {item['page']} 页 · " if item.get("page") else ""
-        st.write(f"{page}{item['sentence']}")
-    st.caption("紧挨在词前面的「不 / 未 / 没有 / 不存在」不计作命中。合规语境里的「法律制裁」也不计入地缘词。")
+    frame = pd.DataFrame(rows)
+    counted = int((frame["status"] == "计入").sum())
+    excluded = int((frame["status"] == "排除").sum())
+    st.caption(f"计入 {counted} 处，排除 {excluded} 处。排除行不进入词频。")
+    show = frame.rename(columns={"term": "词", "sentence": "原句", "page": "页码", "status": "结果", "reason": "原因"})
+    show["页码"] = show["页码"].apply(lambda value: "" if value is None or (isinstance(value, float) and pd.isna(value)) else int(value))
+    st.dataframe(show[["词", "原句", "页码", "结果", "原因"]], use_container_width=True, hide_index=True)
 
 
 def _render_clean_compare(row, market: str, section_name: str) -> None:
@@ -492,7 +496,9 @@ def _render_method(anchors: list[dict], parsed: list[dict]) -> None:
     st.markdown(
         "章节没有切出来时 found 为 0，宽表里对应格子是空的，不能把空值当成强度 0，也不能当成没有风险披露。"
         "内容词少于 40 的章节会标成 short_text，每千词和可读性留空，不与正常章节放在一起比较。"
-        "risk 会再找 MD&A 里面的「风险管理」「风险因素」等小节；找不到只说明标题没对上。"
+        "risk 会再找 MD&A 里面的风险小节。标题没对上是 section_missing；核对年报后确认没有这一节是 section_absent。两种空值都不是强度 0。"
+        "管理层讨论结束之后的「风险管理」「风险因素」是专章，不算风险小节。"
+        "同一公司的风险标题换了，会标 title_shift。这只说明标题变了，不把该年从比较里拿掉。"
         "「法律制裁」「制裁合规」「提升制裁风险防范」这类合规表述不计入地缘词；「经济制裁」「出口管制」仍计入。"
         "正文变长或变短会同时改变分子和分母，每千词升降不一定是同一类话变多。"
         "跨年漂移是用词分布的差异，模板句、目录残留或篇幅变化都会让它变大，不能直接解读为风险上升或下降。"
@@ -518,6 +524,7 @@ def _render_method(anchors: list[dict], parsed: list[dict]) -> None:
                         "n_dropped_lines": item.get("n_dropped_lines"),
                         "n_tokens": item.get("n_tokens"),
                         "quality_flags": item.get("quality_flags"),
+                        "section_status": item.get("section_status"),
                         "comparable": item.get("comparable"),
                     }
                     for item in parsed
@@ -719,8 +726,13 @@ def _read_cached(path_str: str, _mtime: float) -> str:
 
 
 def _render_memory_panel(frame: pd.DataFrame) -> None:
-    show = frame[frame["found"] == 1] if "found" in frame.columns else frame
-    mda = show[show["section"] == "mda"] if "section" in show.columns else show
+    found = frame[frame["found"] == 1] if "found" in frame.columns else frame
+    show = found
+    if "section_status" in frame.columns:
+        absent = frame[frame["section_status"] == "absent"]
+        if not absent.empty:
+            show = pd.concat([found, absent], ignore_index=True)
+    mda = found[found["section"] == "mda"] if "section" in found.columns else found
     chart_mda = _comparable_rows(mda)
     if not chart_mda.empty and chart_mda["fiscal_year"].nunique() >= 2:
         from ui.charts import render_freq_tone_trends
@@ -733,6 +745,8 @@ def _render_memory_panel(frame: pd.DataFrame) -> None:
             st.caption("文本过短或边界可疑的年份没有画进图里，避免和正常章节比每千词。")
         if mda["disclosure_drift"].isna().any():
             st.caption("披露漂移为空的年份没有上一年，不能把那一年读成变化。")
+    if "section_status" in frame.columns and (frame["section_status"] == "absent").any():
+        st.caption("标成 absent 的行已核对，年报里没有这一节。它们不进入图，每千词留空，不是强度 0。")
     st.dataframe(show, use_container_width=True, height=280)
 
 
@@ -758,6 +772,15 @@ def _render_panel(out_dir: Path = OUTPUT_DIR, fallback: pd.DataFrame | None = No
         st.markdown("**公司—年度宽表**")
         wide = pd.read_parquet(wide_path)
         st.dataframe(wide, use_container_width=True, height=240)
+    ready_path = out_dir / "regression_readiness.csv"
+    ready = pd.read_csv(ready_path, dtype=str) if ready_path.exists() else regression_readiness(frame)
+    st.markdown("**能不能进回归**")
+    st.caption(
+        "主键与因子表相同：ticker、fiscal_year、fiscal_quarter、available_date。"
+        "risk_regression_ready 为 1，才表示这年的风险节可以和其他年份比每千词。"
+        "核对后没有这一节、没切到、过短、章外风险管理都是 0。换标题只记在质量标记里。"
+    )
+    st.dataframe(ready, use_container_width=True, height=240)
     if trend_path.exists():
         trend = pd.read_csv(trend_path)
         metric = st.selectbox(
@@ -779,6 +802,7 @@ def _download_row(out_dir: Path) -> None:
         ("宽表 dta", out_dir / "panel_wide.dta", "panel_wide.dta", "dta"),
         ("因子表 CSV", out_dir / "panel_factor.parquet", "panel_factor.csv", "csv"),
         ("因子表 dta", out_dir / "panel_factor.dta", "panel_factor.dta", "dta"),
+        ("回归对照", out_dir / "regression_readiness.csv", "regression_readiness.csv", "file"),
     ]
     for index, (label, path, name, kind) in enumerate(files):
         column = columns[index % 3]
@@ -786,6 +810,9 @@ def _download_row(out_dir: Path) -> None:
             continue
         if kind == "csv":
             data = pd.read_parquet(path).to_csv(index=False).encode("utf-8-sig")
+            mime = "text/csv"
+        elif kind == "file":
+            data = path.read_bytes()
             mime = "text/csv"
         else:
             data = path.read_bytes()
@@ -868,7 +895,9 @@ def _quality_message(flags: str) -> str:
         "short_text": "文本过短，每千词、语气比率和可读性不与正常章节比较",
         "boundary_suspect": "章节边界可疑，后面的标题可能被收了进来",
         "location_missing": "这一节没有页码，句子暂时不能回到原页",
-        "section_missing": "没有切出这一节，空值不是强度 0",
+        "section_absent": "已确认年报里没有这一节。空值不是强度 0，也不是没切到",
+        "section_missing": "这一节没有切出来。空值不是强度 0",
+        "title_shift": "这年的风险标题和该公司其他年份不一样。先看标题，再读词数变化",
     }
     parts = [labels.get(flag, flag) for flag in flags.split("|") if flag]
     return "质量状态：" + "；".join(parts) + "。"

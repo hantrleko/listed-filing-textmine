@@ -41,6 +41,8 @@ CN_TITLES: list[tuple[str, int, str]] = [
     ("risk", 1, "可能面对的风险及应对措施"),
     ("risk", 1, "公司可能面对的风险及应对措施"),
     ("risk", 1, "公司可能面对的风险"),
+    ("risk", 1, "公司可能面临的风险和应对措施"),
+    ("risk", 1, "公司可能面临的风险"),
 ]
 
 US_10K_ITEMS = {
@@ -349,16 +351,19 @@ def split_sections(text: str, market: str, form: str | None = None) -> dict[str,
         if anchor.toc and anchor.toc_page:
             rescued = _toc_slice(text, anchors, anchor.section)
             if rescued is None:
-                body, content_start = "", anchor.start
+                body, content_start, content_end = "", anchor.start, anchor.start
             else:
                 body, content_start, anchor = rescued
+                content_end = _text_span_end(text, content_start, body)
         else:
             content_start = anchor.content_start
             body = text[content_start:end].strip()
+            content_end = end
         if anchor.section == "mda":
             rescued = _toc_slice(text, anchors, "mda")
             if rescued is not None and _cjk_len(rescued[0]) > max(800, _cjk_len(body) * 2):
                 body, content_start, anchor = rescued
+                content_end = _text_span_end(text, content_start, body)
         page = anchor.toc_page or _page_before(text, anchor.start)
         if page and body and not body.startswith("[[PAGE:"):
             body = f"[[PAGE:{page}]]\n{body}"
@@ -368,11 +373,33 @@ def split_sections(text: str, market: str, form: str | None = None) -> dict[str,
             header=anchor.header,
             text=body,
             start=content_start,
-            end=end,
+            end=content_end,
             rank=anchor.rank,
             match_method=anchor.match_method,
         )
+    _drop_chapter_risk_after_mda(out)
     return out
+
+
+def _text_span_end(text: str, start: int, body: str) -> int:
+    if not body:
+        return start
+    pos = text.find(body, max(0, start - 80))
+    if pos < 0:
+        return start + len(body)
+    return pos + len(body)
+
+
+def _drop_chapter_risk_after_mda(sections: dict[str, Section]) -> None:
+    """讨论正文结束之后的「风险管理」「风险因素」是专章，不写入风险节。"""
+    mda = sections.get("mda")
+    risk = sections.get("risk")
+    if mda is None or risk is None:
+        return
+    if risk.title not in {"风险管理", "风险因素"}:
+        return
+    if risk.start >= mda.end:
+        del sections["risk"]
 
 
 def diagnose_anchors(text: str, market: str, form: str | None = None) -> list[dict]:
@@ -465,11 +492,22 @@ def _choose(anchors: list[Anchor]) -> tuple[list[Anchor], list[int]]:
         dedicated = [anchor for anchor in inside if anchor.priority <= 2]
         outside_dedicated = [anchor for anchor in (strong or group) if anchor.priority <= 2 and anchor not in inside]
         picked = _best_anchor(dedicated or inside or outside_dedicated or strong or group, selection_points, section="risk")
-        chosen.append(picked)
-        embedded = bool(mda and mda.content_start <= picked.start < mda_end and not picked.hard)
-        if not embedded and not hard:
-            slice_points = sorted([*slice_points, picked.start])
+        if _weak_risk_outside_mda(picked, mda, mda_end):
+            inside_only = [anchor for anchor in group if mda and mda.content_start <= anchor.start < mda_end]
+            picked = _best_anchor(inside_only, selection_points, section="risk") if inside_only else None
+        if picked is not None:
+            chosen.append(picked)
+            embedded = bool(mda and mda.content_start <= picked.start < mda_end and not picked.hard)
+            if not embedded and not hard:
+                slice_points = sorted([*slice_points, picked.start])
     return chosen, slice_points
+
+
+def _weak_risk_outside_mda(anchor: Anchor, mda: Anchor | None, mda_end: int) -> bool:
+    """讨论章节结束之后的「风险管理」「风险因素」是专章，不是风险小节。"""
+    if mda is None or anchor.priority < 4:
+        return False
+    return not (mda.content_start <= anchor.start < mda_end)
 
 
 def _risk_pointer_anchor(anchor: Anchor) -> bool:

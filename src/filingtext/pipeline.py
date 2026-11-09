@@ -18,7 +18,7 @@ from filingtext.features import apply_corpus, finbert_tone
 from filingtext.lexicon import DICTIONARY_VERSION, load_loughran_mcdonald
 from filingtext.panel import export_panel, summarize, to_frame
 from filingtext.parse_job import parse_path
-from filingtext.quality import apply_yoy_quality
+from filingtext.quality import apply_title_shift, apply_yoy_quality
 
 log = logging.getLogger(__name__)
 
@@ -133,6 +133,7 @@ def run(
     emit("清洗落盘", "正文、原文与删除日志", "run")
     _persist_text(records, Path(text_dir) if text_dir else TEXT_DIR)
     apply_yoy_quality(records)
+    apply_title_shift(records)
     apply_corpus(records)
     frame = to_frame(records)
     emit("导出", "parquet / dta / duckdb / 因子表", "run")

@@ -192,3 +192,44 @@ def test_internal_enumerated_heading_is_not_a_boundary_leak():
     leaked = "第四节 公司治理\n治理结构稳定。\n"
     assert leaks_sibling_heading(leaked, 1) is True
 
+
+def test_risk_management_after_mda_is_not_the_risk_section():
+    text = """第三节 管理层讨论与分析
+报告期内公司营业收入保持增长，盈利能力稳健，董事会认为经营正常。
+第四节 公司治理
+治理结构稳定规范运作，这段不应进入管理层讨论正文内容。
+风险管理
+信用风险、市场风险和操作风险由专门委员会按季监测，并形成书面报告提交董事会。
+"""
+    sections = split_sections(text, "CN")
+    assert "risk" not in sections
+    assert "信用风险" not in sections["mda"].text
+
+
+def test_risk_management_after_governance_cut_is_not_the_risk_section():
+    text = """第三节 管理层讨论与分析
+报告期内公司营业收入保持增长，盈利能力稳健，董事会认为经营正常。
+一、公司治理
+治理结构稳定规范运作，这段不应进入管理层讨论正文内容。
+风险管理
+信用风险、市场风险和操作风险由专门委员会按季监测，并形成书面报告提交董事会。
+第五节 财务报告
+财务报表附注，这段在更后面的硬边界之前。
+"""
+    sections = split_sections(text, "CN")
+    assert "risk" not in sections
+    assert "信用风险" not in sections["mda"].text
+
+
+def test_risk_management_inside_mda_stays():
+    text = """第三节 管理层讨论与分析
+报告期内公司营业收入保持增长，盈利能力稳健。
+风险管理
+信用风险、市场风险和操作风险由专门委员会按季监测，并形成书面报告提交董事会。
+第四节 公司治理
+治理结构稳定规范运作，这段不应进入管理层讨论正文内容。
+"""
+    sections = split_sections(text, "CN")
+    assert "信用风险" in sections["risk"].text
+    assert "治理结构稳定" not in sections["risk"].text
+

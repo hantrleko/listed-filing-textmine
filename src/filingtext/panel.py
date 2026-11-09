@@ -60,7 +60,7 @@ def to_frame(records: list[dict]) -> pd.DataFrame:
         "geopol_per_char_k",
     ]:
         frame[column] = pd.to_numeric(frame[column], errors="coerce")
-    for column in ("doc_id", "market", "ticker", "stkcd", "cik", "firm_name", "report_type", "form", "section", "source_path", "text_path", "raw_text_path", "clean_log_path", "text_sha1", "filing_date", "announce_date", "available_date", "section_title", "match_method", "source_url", "source_sha1", "exchange", "fetched_at", "data_version", "app_version", "quality_flags", "fog_method", "tone_method", "error"):
+    for column in ("doc_id", "market", "ticker", "stkcd", "cik", "firm_name", "report_type", "form", "section", "source_path", "text_path", "raw_text_path", "clean_log_path", "text_sha1", "filing_date", "announce_date", "available_date", "section_title", "match_method", "source_url", "source_sha1", "exchange", "fetched_at", "data_version", "app_version", "quality_flags", "section_status", "fog_method", "tone_method", "error"):
         frame[column] = frame[column].fillna("").astype(str)
     return frame
 
@@ -169,6 +169,134 @@ def to_wide(frame: pd.DataFrame) -> pd.DataFrame:
     return wide.sort_values(["market", "ticker", "fiscal_year"]).reset_index(drop=True)
 
 
+READINESS_COLUMNS = [
+    "market",
+    "ticker",
+    "fiscal_year",
+    "fiscal_quarter",
+    "announce_date",
+    "available_date",
+    "mda_section_status",
+    "mda_quality_flags",
+    "mda_comparable",
+    "mda_regression_ready",
+    "risk_section_status",
+    "risk_quality_flags",
+    "risk_comparable",
+    "risk_in_mda",
+    "risk_regression_ready",
+]
+
+
+def regression_readiness(frame: pd.DataFrame) -> pd.DataFrame:
+    """公司—年度能否把每千词放进回归。主键与因子表相同，另保留 market 以免跨市场撞车。
+
+    风险节起始页落在管理层讨论起止页之外时，risk_in_mda 为 0，不能进回归。
+    页码缺失时不凭空判成章外。title_shift 留在质量标记里，不单独把该年判成 0。
+    """
+    if frame is None or frame.empty:
+        return pd.DataFrame(columns=READINESS_COLUMNS)
+    data = frame.copy()
+    for column in (
+        "market",
+        "ticker",
+        "fiscal_year",
+        "fiscal_quarter",
+        "announce_date",
+        "available_date",
+        "section",
+        "section_status",
+        "quality_flags",
+        "comparable",
+        "found",
+        "page_start",
+        "page_end",
+    ):
+        if column not in data.columns:
+            data[column] = pd.NA
+    keys = data[["market", "ticker", "fiscal_year"]].drop_duplicates()
+    rows = []
+    for key in keys.itertuples(index=False):
+        part = data[(data["market"] == key.market) & (data["ticker"] == key.ticker) & (data["fiscal_year"] == key.fiscal_year)]
+        mda = _one_section(part, "mda")
+        risk = _one_section(part, "risk")
+        inside = _risk_in_mda(mda, risk)
+        mda_ready = int(mda is not None and _as_int(mda["comparable"]) == 1)
+        risk_located = pd.isna(inside) or int(inside) == 1
+        risk_ready = int(risk is not None and _as_int(risk["comparable"]) == 1 and risk_located)
+        rows.append(
+            {
+                "market": key.market,
+                "ticker": key.ticker,
+                "fiscal_year": key.fiscal_year,
+                "fiscal_quarter": _first_value(part["fiscal_quarter"]),
+                "announce_date": _first_value(part["announce_date"]),
+                "available_date": _first_value(part["available_date"]),
+                "mda_section_status": _section_field(mda, "section_status"),
+                "mda_quality_flags": _section_field(mda, "quality_flags"),
+                "mda_comparable": 0 if mda is None else _as_int(mda["comparable"]),
+                "mda_regression_ready": mda_ready,
+                "risk_section_status": _section_field(risk, "section_status"),
+                "risk_quality_flags": _section_field(risk, "quality_flags"),
+                "risk_comparable": 0 if risk is None else _as_int(risk["comparable"]),
+                "risk_in_mda": inside,
+                "risk_regression_ready": risk_ready,
+            }
+        )
+    ready = pd.DataFrame(rows, columns=READINESS_COLUMNS)
+    return ready.sort_values(["market", "ticker", "fiscal_year"]).reset_index(drop=True)
+
+
+def _one_section(part: pd.DataFrame, section: str) -> pd.Series | None:
+    rows = part[part["section"] == section]
+    if rows.empty:
+        return None
+    return rows.iloc[0]
+
+
+def _section_field(row: pd.Series | None, column: str) -> str:
+    if row is None:
+        return ""
+    value = row.get(column)
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return ""
+    return str(value)
+
+
+def _first_value(series: pd.Series):
+    for value in series:
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            continue
+        text = str(value).strip()
+        if text and text.lower() not in {"nan", "none", "<na>"}:
+            return value
+    return pd.NA
+
+
+def _as_int(value) -> int:
+    number = pd.to_numeric(value, errors="coerce")
+    if pd.isna(number):
+        return 0
+    return int(number)
+
+
+def _risk_in_mda(mda: pd.Series | None, risk: pd.Series | None):
+    if risk is None or _as_int(risk.get("found")) != 1:
+        return pd.NA
+    if mda is None:
+        return pd.NA
+    mda_end = pd.to_numeric(mda.get("page_end"), errors="coerce")
+    risk_start = pd.to_numeric(risk.get("page_start"), errors="coerce")
+    if pd.isna(mda_end) or pd.isna(risk_start):
+        return pd.NA
+    mda_start = pd.to_numeric(mda.get("page_start"), errors="coerce")
+    if pd.notna(mda_start) and float(risk_start) < float(mda_start) - 1:
+        return 0
+    if float(risk_start) > float(mda_end) + 1:
+        return 0
+    return 1
+
+
 def to_factor(frame: pd.DataFrame) -> pd.DataFrame:
     """因子工作台主键：ticker、fiscal_year、fiscal_quarter、available_date。
 
@@ -211,6 +339,9 @@ def export_panel(frame: pd.DataFrame, out_dir: str | Path) -> dict[str, Path]:
     duckdb_path = out / "panel.duckdb"
     wide = to_wide(frame)
     factor = to_factor(frame)
+    readiness = regression_readiness(frame)
+    readiness_path = out / "regression_readiness.csv"
+    readiness.to_csv(readiness_path, index=False, encoding="utf-8-sig")
     frame.to_parquet(parquet_path, index=False)
     wide.to_parquet(wide_parquet, index=False)
     factor_parquet = out / "panel_factor.parquet"
@@ -232,6 +363,7 @@ def export_panel(frame: pd.DataFrame, out_dir: str | Path) -> dict[str, Path]:
         "wide_dta": wide_dta,
         "factor_parquet": factor_parquet,
         "factor_dta": factor_dta,
+        "readiness": readiness_path,
         "duckdb": duckdb_path,
         "diagnostics": out / "diagnostics.json",
         "trend": out / "trend_by_year.csv",

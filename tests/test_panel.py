@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 
 from filingtext.demo import write_samples
-from filingtext.panel import to_factor, to_frame, write_duckdb
+from filingtext.panel import regression_readiness, to_factor, to_frame, write_duckdb
 from filingtext.pipeline import run
 
 
@@ -121,3 +121,58 @@ def test_factor_key_uses_announcement_date_not_fiscal_year_end(tmp_path: Path):
     assert int(factor.loc[0, "fiscal_quarter"]) == 4
     assert factor.loc[0, "available_date"] == "2024-04-03"
     assert "mda_digital_per_k" in factor.columns
+
+
+def test_readiness_separates_absent_short_and_outside():
+    frame = pd.DataFrame(
+        [
+            _ready_row("000538", 2023, "mda", 1, 1, "found", "", 10, 44),
+            _ready_row("000538", 2023, "risk", 0, 0, "absent", "section_absent", None, None),
+            _ready_row("600519", 2023, "mda", 1, 1, "found", "", 7, 21),
+            _ready_row("600519", 2023, "risk", 1, 0, "found", "short_text", 21, 21),
+            _ready_row("601398", 2022, "mda", 1, 1, "found", "", 21, 74),
+            _ready_row("601398", 2022, "risk", 0, 0, "missing", "section_missing", None, None),
+            _ready_row("600036", 2023, "mda", 1, 1, "found", "", 20, 80),
+            _ready_row("600036", 2023, "risk", 1, 1, "found", "", 65, 70),
+            _ready_row("600000", 2024, "mda", 1, 1, "found", "", 23, 96),
+            _ready_row("600000", 2024, "risk", 1, 1, "found", "title_shift", 90, 96),
+        ]
+    )
+    ready = regression_readiness(frame).set_index("ticker")
+    baiyao = ready.loc["000538"]
+    assert baiyao["risk_section_status"] == "absent"
+    assert baiyao["risk_quality_flags"] == "section_absent"
+    assert int(baiyao["risk_regression_ready"]) == 0
+    assert int(baiyao["fiscal_quarter"]) == 4
+    assert baiyao["available_date"] == "2024-04-03"
+    moutai = ready.loc["600519"]
+    assert int(moutai["risk_comparable"]) == 0
+    assert moutai["risk_quality_flags"] == "short_text"
+    assert int(moutai["risk_regression_ready"]) == 0
+    icbc = ready.loc["601398"]
+    assert icbc["risk_section_status"] == "missing"
+    assert int(icbc["risk_regression_ready"]) == 0
+    cmb = ready.loc["600036"]
+    assert int(cmb["risk_in_mda"]) == 1
+    assert int(cmb["risk_regression_ready"]) == 1
+    spdb = ready.loc["600000"]
+    assert spdb["risk_quality_flags"] == "title_shift"
+    assert int(spdb["risk_regression_ready"]) == 1
+
+
+def _ready_row(ticker, year, section, found, comparable, status, flags, page_start, page_end):
+    return {
+        "market": "CN",
+        "ticker": ticker,
+        "fiscal_year": year,
+        "fiscal_quarter": 4,
+        "announce_date": "2024-04-02",
+        "available_date": "2024-04-03",
+        "section": section,
+        "found": found,
+        "comparable": comparable,
+        "section_status": status,
+        "quality_flags": flags,
+        "page_start": page_start,
+        "page_end": page_end,
+    }

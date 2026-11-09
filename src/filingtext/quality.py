@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import csv
 import re
 import statistics
+from pathlib import Path
 
 from filingtext.config import MIN_COMPARE_TOKENS
 from filingtext.sections import leaks_sibling_heading
@@ -53,6 +55,46 @@ def apply_record_quality(record: dict, raw_body: str, rank: int, cleaned_body: s
     record["comparable"] = int(bool(record.get("found")) and not any(flag in flags for flag in bad))
     if not record["comparable"]:
         _suppress_ratios(record)
+    apply_section_status(record)
+
+
+def apply_section_status(record: dict) -> None:
+    """已确认没有这一节的年报写成 absent，空值仍然不是强度 0。"""
+    if record.get("found"):
+        record["section_status"] = "found"
+        return
+    if _confirmed_absent(record.get("ticker"), record.get("fiscal_year"), record.get("section")):
+        record["section_status"] = "absent"
+        flags = [part for part in (record.get("quality_flags") or "").split("|") if part and part != "section_missing"]
+        if "section_absent" not in flags:
+            flags.append("section_absent")
+        record["quality_flags"] = "|".join(flags)
+        record["comparable"] = 0
+        _suppress_ratios(record)
+        return
+    record["section_status"] = "missing"
+
+
+def _confirmed_absent(ticker, fiscal_year, section) -> bool:
+    if fiscal_year in ("", None) or section in ("", None):
+        return False
+    key = (str(ticker).zfill(6)[-6:], int(fiscal_year), str(section))
+    return key in _ABSENT
+
+
+def _load_absent() -> set[tuple[str, int, str]]:
+    path = Path(__file__).with_name("confirmed_absent.csv")
+    if not path.exists():
+        return set()
+    found = set()
+    for row in csv.DictReader(path.open(encoding="utf-8-sig")):
+        if row.get("status") != "absent":
+            continue
+        found.add((str(row["ticker"]).zfill(6), int(row["fiscal_year"]), row["section"]))
+    return found
+
+
+_ABSENT = _load_absent()
 
 
 def apply_yoy_quality(records: list[dict]) -> None:
@@ -79,3 +121,40 @@ def apply_yoy_quality(records: list[dict]) -> None:
             if row.get("comparable"):
                 row["comparable"] = 0
                 _suppress_ratios(row)
+
+
+def apply_title_shift(records: list[dict]) -> None:
+    """同一公司已找到的风险标题不一致时，标出偏离多数标题的年份。
+
+    没切到和已确认缺失的年份不参加比较。标记只说明标题换了，不改可比性。
+    """
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for row in records:
+        if str(row.get("section")) != "risk" or not row.get("found"):
+            continue
+        if row.get("section_status") == "absent":
+            continue
+        title = str(row.get("section_title") or "").strip()
+        if not title:
+            continue
+        groups.setdefault((str(row.get("ticker")), "risk"), []).append(row)
+    for rows in groups.values():
+        titles = [str(row.get("section_title") or "").strip() for row in rows]
+        if len(set(titles)) < 2:
+            continue
+        counts: dict[str, int] = {}
+        for title in titles:
+            counts[title] = counts.get(title, 0) + 1
+        top = max(counts.values())
+        modes = {title for title, count in counts.items() if count == top}
+        for row, title in zip(rows, titles):
+            if len(modes) == 1 and title in modes:
+                continue
+            _append_flag(row, "title_shift")
+
+
+def _append_flag(row: dict, flag: str) -> None:
+    flags = [part for part in (row.get("quality_flags") or "").split("|") if part]
+    if flag not in flags:
+        flags.append(flag)
+    row["quality_flags"] = "|".join(flags)

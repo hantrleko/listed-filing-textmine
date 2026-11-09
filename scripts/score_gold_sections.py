@@ -1,4 +1,4 @@
-"""按人工起止页给当前切分打分。金标准留空的行会跳过。"""
+"""用已核对的起止页给验收集报告打分。"""
 
 from __future__ import annotations
 
@@ -10,34 +10,34 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import pandas as pd
 
-GOLD = ROOT / "data" / "validation" / "gold_sections.csv"
+from filingtext.gold import load_section_pages, page_misses
+
+GOLD = ROOT / "tests" / "fixtures" / "section_pages.csv"
 REPORT = ROOT / "data" / "validation" / "validation_report.csv"
 
 
+def actual_from_report(report: pd.DataFrame) -> dict:
+    actual = {}
+    for row in report.itertuples():
+        year = int(row.fiscal_year)
+        ticker = str(row.stkcd)
+        actual[(ticker, year, "mda")] = {"page_start": row.page_start, "page_end": row.page_end}
+        risk_end = getattr(row, "risk_page_end", "")
+        actual[(ticker, year, "risk")] = {"page_start": row.risk_page_start, "page_end": risk_end}
+    return actual
+
+
 def main() -> None:
-    if not GOLD.exists() or not REPORT.exists():
-        raise SystemExit("需要 gold_sections.csv 和 validation_report.csv")
-    gold = pd.read_csv(GOLD, dtype=str).fillna("")
+    if not REPORT.exists():
+        raise SystemExit("需要 data/validation/validation_report.csv")
+    gold = load_section_pages(GOLD)
     report = pd.read_csv(REPORT, dtype=str).fillna("")
-    scored = gold[(gold["page_start"] != "") & (gold["page_end"] != "")]
-    if scored.empty:
-        print("金标准还没有填写起止页")
-        return
-    hits = 0
-    for row in scored.itertuples():
-        part = report[(report["stkcd"] == row.ticker) & (report["fiscal_year"] == row.fiscal_year)]
-        if part.empty:
-            continue
-        current = part.iloc[0]
-        if row.section == "risk":
-            got = current.get("risk_page_start") or ""
-        else:
-            got = current.get("page_start") or ""
-        if not got:
-            continue
-        if abs(float(got) - float(row.page_start)) <= 1:
-            hits += 1
-    print(f"起止页误差不超过 1 页：{hits}/{len(scored)}")
+    misses = page_misses(actual_from_report(report), gold)
+    print(f"起止页误差不超过 1 页：{len(gold) - len(misses)}/{len(gold)}")
+    for item in misses:
+        print(item)
+    if misses:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

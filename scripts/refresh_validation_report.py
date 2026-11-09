@@ -50,6 +50,8 @@ def main() -> None:
                 "risk_comparable": int(r["comparable"]) if r is not None else 0,
                 "quality_flags_mda": m["quality_flags"] if m is not None else "",
                 "quality_flags_risk": r["quality_flags"] if r is not None else "",
+                "section_status_mda": m.get("section_status", "") if m is not None else "",
+                "section_status_risk": r.get("section_status", "") if r is not None else "",
                 "section_title_mda": m.get("section_title", "") if m is not None else "",
                 "section_title_risk": r.get("section_title", "") if r is not None else "",
                 "match_method_mda": m.get("match_method", "") if m is not None else "",

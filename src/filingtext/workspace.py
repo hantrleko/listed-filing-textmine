@@ -10,7 +10,8 @@ from filingtext.config import WORKSPACE_OUT, WORKSPACE_RAW, WORKSPACE_TEXT
 from filingtext.pipeline import run
 from filingtext.sources import download_cninfo, download_edgar
 
-MAX_FILINGS = 8
+LARGE_BATCH = 24
+WEB_HARD_CAP = 200
 
 
 def parse_codes(raw: str) -> list[str]:
@@ -24,7 +25,8 @@ def build_from_codes(
     end: int,
     edgar_contact: str = "",
     forms: list[str] | None = None,
-    max_filings: int = MAX_FILINGS,
+    max_filings: int | None = None,
+    confirm_large: bool = False,
     on_event=None,
 ) -> dict:
     market = market.upper()
@@ -36,7 +38,13 @@ def build_from_codes(
         raise ValueError("结束年需要大于或等于起始年。")
     form_list = forms or (["10-K"] if market == "US" else ["annual"])
     estimate = len(chosen) * (end - start + 1) * max(1, len(form_list) if market == "US" else 1)
-    if estimate > max_filings:
+    if estimate > WEB_HARD_CAP:
+        raise ValueError(
+            f"这次大约会下载 {estimate} 份，网页任务最多 {WEB_HARD_CAP} 份。请用 scripts/build_factor_panel.py。"
+        )
+    if estimate > LARGE_BATCH and not confirm_large:
+        raise ValueError(f"这次大约会下载 {estimate} 份。确认后再提交。")
+    if max_filings is not None and estimate > max_filings:
         raise ValueError(
             f"这次大约会下载 {estimate} 份文件，单次最多 {max_filings} 份。请减少代码或缩短年份。"
         )

@@ -6,7 +6,7 @@ import math
 import re
 from collections import Counter
 
-from filingtext.lexicon import register_jieba, tone_lexicons, topic_lexicons
+from filingtext.lexicon import formal_tone_available, register_jieba, tone_lexicons, topic_lexicons
 
 ZH_STOP = {
     "的", "了", "和", "与", "及", "或", "在", "对", "为", "是", "公司", "本公司", "我们",
@@ -126,35 +126,72 @@ def readability(text: str, tokens: list[str], lang: str) -> dict:
     }
 
 
-_ZH_NEGATION = re.compile(r"(没有|并非|难以|尚未|未|不|没)$")
-_EN_NEGATION = re.compile(r"\b(?:no|not|never|without|neither|nor)\b\W*$", re.I)
+_CLAUSE_BOUNDARY = re.compile(r"[，,；;。！？!?：:]")
+_ZH_NEG_CUE = re.compile(r"没有|并非|难以|尚未|并未|不存在|不是|不再|不能|不可|无法|未能|未(?!来)")
+_ZH_BARE_BU = re.compile(r"不(?![良利断过仅但只同论妨时一])")
+_EN_NEGATION = re.compile(r"\b(?:no|not|never|without|neither|nor)\b", re.I)
+
+
+def _clause_prefix(text: str, start: int) -> str:
+    """命中词所在分句里、该词之前的文字。顿号不断句，避免并列项被前一项的否定带走。"""
+    head = text[:start]
+    parts = _CLAUSE_BOUNDARY.split(head)
+    clause = parts[-1] if parts else head
+    if re.search(r"而是|但是|然而", clause):
+        clause = re.split(r"而是|但是|然而", clause)[-1]
+    return clause
 
 
 def _negated(text: str, start: int, lang: str) -> bool:
+    clause = _clause_prefix(text, start)
     if lang == "zh":
-        return bool(_ZH_NEGATION.search(text[max(0, start - 4) : start]))
-    return bool(_EN_NEGATION.search(text[max(0, start - 24) : start]))
+        return bool(_ZH_NEG_CUE.search(clause) or _ZH_BARE_BU.search(clause))
+    return bool(_EN_NEGATION.search(clause))
 
 
 def _tone_counts(text: str, tones: dict[str, list[str]], lang: str) -> dict[str, int]:
-    """近距离否定会翻转积极/消极。`没有改善` 不再计为积极。"""
+    """分句内的否定会翻转积极/消极。`没有改善` 不再计为积极，逗号前的否定不影响后半句。"""
     pos = neg = 0
-    for start, _end, _term in find_spans(text, tones.get("pos", []), lang):
-        if _negated(text, start, lang):
-            neg += 1
-        else:
-            pos += 1
-    for start, _end, _term in find_spans(text, tones.get("neg", []), lang):
-        if _negated(text, start, lang):
-            pos += 1
-        else:
-            neg += 1
+    if lang == "zh":
+        pos_set = set(tones.get("pos", []))
+        neg_set = set(tones.get("neg", []))
+        for term, start, _end in _zh_token_spans(text):
+            if term in pos_set:
+                if _negated(text, start, lang):
+                    neg += 1
+                else:
+                    pos += 1
+            elif term in neg_set:
+                if _negated(text, start, lang):
+                    pos += 1
+                else:
+                    neg += 1
+    else:
+        for start, _end, _term in find_spans(text, tones.get("pos", []), lang):
+            if _negated(text, start, lang):
+                neg += 1
+            else:
+                pos += 1
+        for start, _end, _term in find_spans(text, tones.get("neg", []), lang):
+            if _negated(text, start, lang):
+                pos += 1
+            else:
+                neg += 1
     return {
         "pos": pos,
         "neg": neg,
         "unc": sum(count_terms(text, tones.get("unc", []), lang).values()),
         "lit": sum(count_terms(text, tones.get("lit", []), lang).values()),
     }
+
+
+def _zh_token_spans(text: str):
+    import jieba
+
+    for term, start, end in jieba.tokenize(text):
+        term = term.strip()
+        if term:
+            yield term, start, end
 
 
 def _geopol_block_reason(text: str, start: int, term: str) -> str | None:
@@ -185,12 +222,7 @@ def _count_geopol(text: str, terms: list[str], lang: str) -> dict[str, int]:
     return counts
 
 
-_TOPIC_NEGATION = re.compile(r"(不存在|没有|并未|尚未|并非|难以|未|不|没)$")
-
-
 def _topic_negated(text: str, start: int, lang: str) -> bool:
-    if lang == "zh":
-        return bool(_TOPIC_NEGATION.search(text[max(0, start - 8) : start]))
     return _negated(text, start, lang)
 
 
@@ -252,8 +284,13 @@ def score_document(
         metrics["tone_net"] = (tone_counts["pos"] - tone_counts["neg"]) / n_tokens
     else:
         metrics["tone_net"] = None
-    base_method = "seed_dictionary" if tone_override is None else "loughran_mcdonald"
-    metrics["tone_method"] = base_method + "+negation"
+    if tone_override is not None:
+        base_method = "loughran_mcdonald"
+    elif lang == "zh":
+        base_method = "yao2021_formal" if formal_tone_available() else "seed_dictionary"
+    else:
+        base_method = "seed_dictionary"
+    metrics["tone_method"] = base_method + "+clause_negation"
     metrics["finbert_pos"] = None
     metrics["finbert_neg"] = None
     metrics["finbert_neu"] = None
@@ -302,17 +339,28 @@ def apply_corpus(records: list[dict]) -> list[dict]:
         prev = index.get((row["market"], row["ticker"], row["section"], int(row["fiscal_year"]) - 1))
         if prev is None:
             row["yoy_similarity"] = None
+            row["yoy_jaccard"] = None
             row["disclosure_drift"] = None
+            row["new_sentence_share"] = None
             continue
-        sim = cosine_tfidf(row["token_counts"], prev["token_counts"], idf, language_for_market(row["market"]))
+        lang = language_for_market(row["market"])
+        sim = cosine_tfidf(row["token_counts"], prev["token_counts"], idf, lang)
         row["yoy_similarity"] = sim
+        row["yoy_jaccard"] = jaccard_tokens(row["token_counts"], prev["token_counts"], lang)
         row["disclosure_drift"] = None if sim is None else 1.0 - sim
+        row["new_sentence_share"] = new_sentence_share(
+            prev.get("section_text") or "",
+            row.get("section_text") or "",
+            row["market"],
+        )
 
     for row in records:
         row.pop("token_counts", None)
         row.pop("term_hits", None)
         row.setdefault("yoy_similarity", None)
+        row.setdefault("yoy_jaccard", None)
         row.setdefault("disclosure_drift", None)
+        row.setdefault("new_sentence_share", None)
         row.setdefault("is_duplicate", 0)
         for lex in ("esg", "digital", "geopol"):
             row.setdefault(f"{lex}_tfidf", None)
@@ -349,6 +397,40 @@ def cosine_tfidf(c1: dict, c2: dict, idf: dict[str, float], lang: str) -> float 
     if n1 <= 0 or n2 <= 0:
         return None
     return dot / math.sqrt(n1 * n2)
+
+
+def jaccard_tokens(c1: dict, c2: dict, lang: str) -> float | None:
+    """内容词集合的 Jaccard。停用词和单字不进入集合。"""
+    stop = ZH_STOP if lang == "zh" else EN_STOP
+
+    def keep(term: str) -> bool:
+        return term not in stop and len(term) > 1
+
+    left = {term for term in c1 if keep(term)}
+    right = {term for term in c2 if keep(term)}
+    if not left and not right:
+        return None
+    union = left | right
+    if not union:
+        return None
+    return len(left & right) / len(union)
+
+
+def new_sentence_share(previous: str, current: str, market: str) -> float | None:
+    """本年句子里，对不上上年句子的占比。没有上一年或任一侧没有句子时为空。"""
+    import difflib
+
+    lang = language_for_market(market)
+    old = _sentences(previous or "", lang)
+    new = _sentences(current or "", lang)
+    if not old or not new:
+        return None
+    matcher = difflib.SequenceMatcher(a=old, b=new, autojunk=False)
+    added = 0
+    for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
+        if tag in {"insert", "replace"}:
+            added += j2 - j1
+    return added / len(new)
 
 
 def _sentences(text: str, lang: str) -> list[str]:

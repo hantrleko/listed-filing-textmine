@@ -25,7 +25,7 @@ pip install -e ".[finbert]"
 streamlit run app/dashboard.py
 ```
 
-左侧「我的面板」可以按代码和年份抓取，或上传已有 PDF / HTML。结果写到 `data/workspace/output/`，不会改样本案例里的数字。网页单次最多下载 8 份。更大的样本：
+左侧「我的面板」可以按代码和年份抓取，或上传已有 PDF / HTML。结果写到 `data/workspace/output/`，不会改样本案例里的数字。抓取在后台跑，刷新页面还能看到进度。超过 24 份需要确认，超过 200 份用下面的脚本。已下载的原文按 SHA1 留在 `data/cache/originals/`。
 
 ```powershell
 python scripts/build_factor_panel.py --codes 600519,600276,600887 --start 2022 --end 2024 --out data/factor_panel
@@ -33,7 +33,7 @@ python scripts/build_factor_panel.py --codes 600519,600276,600887 --start 2022 -
 
 `data/factor_panel/output/panel_factor.dta` 用因子工作台的主键：`ticker`、`fiscal_year`、`fiscal_quarter`、`available_date`。年报的 `fiscal_quarter` 为 4。`announce_date` / `filing_date` 为巨潮公告日；`available_date` 为公告日 T+1，与东财 `NOTICE_DATE` 对齐。不要用 `fiscal_year` 单独做时点对齐。`pit_ready=0` 表示没有公告日。文本过短、边界可疑、指引句或同比长度跳变时，每千词和语气比率为空，计数仍在。
 
-版本路线见 `CHANGELOG.md`。当前是 **0.9.3**：章外的「风险管理」不再当作风险节，风险标题换了会标 `title_shift`，宽表旁有 `regression_readiness.csv`。此前 **0.9.2** 把已核对的缺失章节标成 `section_absent`。
+版本路线见 `CHANGELOG.md`。当前是 **0.9.6**。抓取改为后台任务，原文按 SHA1 缓存。语气净值和披露漂移可以按 `available_date` 接到因子工作台，走同一套中性化、保留样本和成本；截面不够时不算收益。本机只读接口是 `python -m filingtext.panel_api`。此前 **0.9.5** 换了正式用语词表，并给出种子词的一轮抽检。
 
 
 源码：https://github.com/hantrleko/listed-filing-textmine 。词典版本写在 `data_version` / 因子表的 `dictionary_version`。
@@ -104,9 +104,21 @@ PDF 会丢掉页眉页脚区域，并去掉跨页重复的短行和数字密集�
 - `*_per_k`：命中次数 / 内容词数 × 1000
 - `*_tfidf`：对词表中每个词，`tf = 次数 / 内容词数`，`idf = ln((N+1)/(df+1))+1`，再求和。`N` 和 `df` 来自本次成功解析、且非重复的章节样本
 - `fog_index`：英文是 Gunning Fog，`0.4 × (词数/句数 + 100 × 三音节及以上词占比)`。中文是同结构的类比，`0.4 × (词数/句数 + 100 × 四字及以上词占比)`。`avg_sentence_len` 在中文样本里是每句汉字数
-- `tone_net`：`(积极词数 - 消极词数) / 内容词数`。`risk` / `风险` 放在不确定词里，不进消极词。词典法不处理否定，`没有改善` 仍会计入 `改善`
+- `tone_net`：`(积极词数 - 消极词数) / 内容词数`。中文积极、消极词来自姚加权等（2021）正式用语词表，「风险」「下降」计入消极；不确定和诉讼仍是种子词，与正式词表重复的词从这两类里拿掉。匹配按整词，不按子串。否定看该词所在分句、该词之前：`没有改善` 计消极，不计积极。逗号会切开分句，顿号不会。英文仍是种子词，可用 Loughran-McDonald 覆盖
 - `yoy_similarity`：同一市场、同一公司、同一章节、上一会计年度的 TF-IDF 余弦（去掉停用词）。没有上一年则为空
+- `yoy_jaccard`：内容词集合的 Jaccard。停用词和单字不进集合
 - `disclosure_drift`：`1 - yoy_similarity`
+- `new_sentence_share`：本年句子里，对不上上年的句子所占比例。任一侧没有足够长的句子时为空
+
+语气净值与披露漂移可以接到因子工作台的月末收益上，见 `scripts/eval_text_factors.py`。预注册方向分别是做多高语气、做多低漂移。当月少于 12 只股票，或有效月末不够 24 个月训练加 12 个月保留样本时，脚本只说明覆盖，不写收益。
+
+因子表的本机只读接口：
+
+```powershell
+python -m filingtext.panel_api --root data/workspace/output
+```
+
+`/health`、`/panel/meta`、`/panel/factor.json` 和 `/panel/factor.parquet` 只绑定在 127.0.0.1。接口不返回章节正文。
 
 重复的公司-章节-年份保留正文字数更长的一条参与 TF-IDF 和同比，另一条 `is_duplicate=1`。
 

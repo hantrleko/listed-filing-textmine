@@ -276,5 +276,7 @@ def _empty_scores() -> dict:
         data[f"{name}_per_k"] = None
         data[f"{name}_tfidf"] = None
     data["yoy_similarity"] = None
+    data["yoy_jaccard"] = None
     data["disclosure_drift"] = None
+    data["new_sentence_share"] = None
     return data

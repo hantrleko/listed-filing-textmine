@@ -29,7 +29,14 @@ CLEANING_RULES = [
     "版面框没有罩住时，仍删除括号数字列、几乎没有汉字的残句，以及「营业收入 / 毛利率 / 同比」这类拆开的表头。",
     "跨页重复的短页眉页脚删除。章节标题行保留，用来切边界。",
     "PDF 顶栏 6% 和底栏 6% 在抽字时丢掉。指标只对清洗后的章节正文计算。原文和删除记录留作对照。",
+    "单独成行的表格标题（如「(2). 产销量情况分析表」）删除，不进入分母。",
+    "「详见本报告第 N 页」这类整句引用删除。句子里还有其他叙述时，只去掉引用，留下其余文字。",
 ]
+
+_TABLE_CAPTION = re.compile(
+    r"^(?:[（(]?\d+[)）]?[.、．]?\s*)?[\u4e00-\u9fffA-Za-z0-9]{2,24}表$"
+)
+_PAGE_POINTER = re.compile(r"详见(?:本报告|上文|下文)?第\s*\d+\s*页|请参阅第\s*\d+\s*页|见本报告第\s*\d+\s*页")
 
 _HEADER_BITS = (
     "营业收入",
@@ -109,9 +116,30 @@ def noise_reason(line: str) -> str | None:
         return "残句"
     if _header_fragment(s):
         return "表头"
+    if _TABLE_CAPTION.match(s.replace(" ", "")):
+        return "表题"
+    if _pointer_line(s):
+        return "引用句"
     if is_table_noise(s):
         return "表格行"
     return None
+
+
+def _pointer_line(line: str) -> bool:
+    if not _PAGE_POINTER.search(line):
+        return False
+    rest = re.sub(r"[，。；：、\s]", "", _PAGE_POINTER.sub("", line))
+    return _cjk_count(rest) < 8
+
+
+def _without_page_pointer(line: str) -> str:
+    if not _PAGE_POINTER.search(line):
+        return line
+    rest = _PAGE_POINTER.sub("", line)
+    rest = re.sub(r"[，、]{2,}", "，", rest)
+    rest = re.sub(r"[，、]\s*[。．]", "。", rest)
+    rest = re.sub(r"[。．]{2,}", "。", rest)
+    return rest.strip(" ，、")
 
 
 def _header_fragment(line: str) -> bool:
@@ -232,6 +260,13 @@ def clean_body_report(text: str, skip_lines: set[str] | None = None) -> tuple[st
             shown = line.removeprefix("[[TABLE]]")
             drops.append({"page": page, "reason": reason, "line": shown[:120]})
             continue
+        edited = _without_page_pointer(line)
+        if edited != line:
+            dropped_n += 1
+            drops.append({"page": page, "reason": "引用句", "line": line[:120]})
+            line = edited
+            if not line:
+                continue
         if first_page is None:
             first_page = page
         last_page = page

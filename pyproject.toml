@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "filingtext"
-version = "0.9.3"
+version = "0.9.6"
 description = "A-share and SEC filing section parser and academic text-feature panel builder"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -35,7 +35,7 @@ filingtext = "filingtext.pipeline:main"
 "" = "src"
 
 [tool.setuptools.package-data]
-filingtext = ["lexicons/*.txt", "confirmed_absent.csv"]
+filingtext = ["lexicons/*.txt", "confirmed_absent.csv", "lexicon_audit_summary.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -7,6 +7,7 @@ data/raw/
 data/text/
 data/output/
 data/cache/
+data/workspace/
 data/validation/raw/
 data/validation/text/
 data/validation/output/

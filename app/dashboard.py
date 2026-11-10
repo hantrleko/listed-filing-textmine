@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import streamlit as st
+
+st.set_page_config(page_title="年报文本特征引擎", layout="wide")
+
 import sys
 import tempfile
 from collections import Counter
@@ -11,7 +15,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 import pandas as pd
-import streamlit as st
 
 from filingtext import __version__
 from filingtext.clean import CLEANING_RULES, normalize
@@ -91,7 +94,6 @@ def _render_source(row: dict | None) -> None:
 
 
 def main() -> None:
-    st.set_page_config(page_title="年报文本特征引擎", layout="wide")
     st.title("上市公司文本特征引擎")
     st.caption(
         "章节切分、词典命中高亮、词云和面板时序。语气词是可编辑种子词，不是 Loughran-McDonald 官方全表。"
@@ -107,8 +109,8 @@ def main() -> None:
     sample_name = ""
     panel_dir = OUTPUT_DIR
     if mode == "样本案例":
-        case = st.sidebar.radio("案例", ["示例银行", "Northwind 10-K"])
-        ticker = "000001" if case == "示例银行" else "NWND"
+        case = st.sidebar.radio("案例", ["示例银行", "示例制造", "Northwind 10-K"])
+        ticker = {"示例银行": "000001", "示例制造": "600001", "Northwind 10-K": "NWND"}[case]
         docs = [doc for doc in SAMPLE_DOCS if doc["ticker"] == ticker]
         years = sorted(doc["fiscal_year"] for doc in docs)
         prefer = 2023 if 2023 in years else years[-1]
@@ -191,11 +193,16 @@ def _render_case_intro(name: str, market: str, frame: pd.DataFrame, year: int, d
     if "found" in show.columns:
         show = show[show["found"] == 1]
     mda = show[show["section"] == "mda"]
-    if len(mda) >= 2:
+    comparable = _comparable_rows(mda)
+    if not comparable.empty and comparable["fiscal_year"].nunique() >= 2:
         from ui.charts import render_freq_tone_trends
 
-        render_freq_tone_trends(_comparable_rows(mda))
-        st.write(_describe_case(show))
+        render_freq_tone_trends(comparable)
+        summary = _describe_case(comparable)
+        if summary:
+            st.write(summary)
+    else:
+        st.caption("可比的管理层讨论不足两年，这里不写「由…到…」。")
     _render_drift(docs, year, market, "mda")
 
 
@@ -212,7 +219,11 @@ def _describe_case(frame: pd.DataFrame) -> str:
         ("geopol_per_k", "地缘词强度"),
         ("tone_net", "语气净值"),
     ):
+        if pd.isna(first[column]) or pd.isna(last[column]):
+            continue
         pieces.append(f"{label}由 {_fmt(first[column])} 到 {_fmt(last[column])}")
+    if len(pieces) == 1:
+        return ""
     if pd.notna(last["disclosure_drift"]):
         pieces.append(f"{y1} 年相对上一年的披露漂移是 {_fmt(last['disclosure_drift'])}")
     return "；".join(pieces) + "。"
@@ -408,7 +419,8 @@ def _render_clean_compare(row, market: str, section_name: str) -> None:
         preview = log[:40]
         if len(log) > len(preview):
             st.caption(f"删除记录共 {len(log)} 行，下面只显示前 40 行。完整记录在下载文件里。")
-        st.dataframe(pd.DataFrame(preview), use_container_width=True, height=220)
+        log_frame = pd.DataFrame(preview).rename(columns={"page": "页码", "reason": "原因", "line": "原行"})
+        st.dataframe(log_frame, use_container_width=True, height=220)
     prior = _prior_workspace_text(row)
     if prior:
         _show_diff(prior, cleaned, market, int(row["fiscal_year"]))
@@ -421,13 +433,12 @@ def _render_drift(docs: list[dict], year: int, market: str, section: str) -> Non
     st.session_state["sample_years"] = years
     previous = next((doc for doc in docs if doc["fiscal_year"] == year - 1), None)
     current = next((doc for doc in docs if doc["fiscal_year"] == year), None)
-    if current is None:
-        return
-    if previous is None:
-        st.info(f"{year} 年没有上一年同一章节。披露漂移为空，不能把这一年的分数读成趋势。")
+    if current is None or previous is None:
         return
     before = _section_body(previous, section)
     after = _section_body(current, section)
+    if not before.strip() or not after.strip():
+        return
     _show_diff(before, after, market, year)
 
 
@@ -446,12 +457,19 @@ def _section_body(doc: dict, section: str) -> str:
     return rows[0].get("section_text") or ""
 
 
+def _zh_topic_changes(rows: list[dict]) -> pd.DataFrame:
+    frame = pd.DataFrame(rows)
+    if "lexicon" in frame.columns:
+        frame["lexicon"] = frame["lexicon"].map(lambda key: LABELS.get(key, key))
+    return frame.rename(columns={"lexicon": "词表", "term": "词", "change": "变化"})
+
+
 def _show_diff(before: str, after: str, market: str, year: int) -> None:
     diff = disclosure_diff(before, after, market)
     with st.expander(f"相对 {year - 1} 年的段落变化", expanded=True):
         if diff["topic_changes"]:
             st.write("主题词次数变化（本年 − 上年）")
-            st.dataframe(pd.DataFrame(diff["topic_changes"]), hide_index=True, use_container_width=True)
+            st.dataframe(_zh_topic_changes(diff["topic_changes"]), hide_index=True, use_container_width=True)
         if diff["added"]:
             st.markdown("**本年多出来的句子**")
             for sentence in diff["added"]:
@@ -462,7 +480,8 @@ def _show_diff(before: str, after: str, market: str, year: int) -> None:
                 st.write(sentence)
         if diff["replaced"]:
             st.markdown("**改写最大的句子**")
-            st.dataframe(pd.DataFrame(diff["replaced"]), hide_index=True, use_container_width=True)
+            replaced = pd.DataFrame(diff["replaced"]).rename(columns={"before": "上年句子", "after": "本年句子"})
+            st.dataframe(replaced, hide_index=True, use_container_width=True)
         if not any(diff[key] for key in ("added", "removed", "replaced", "topic_changes")):
             st.write("两年句子几乎相同。")
 
@@ -477,21 +496,75 @@ def _prior_workspace_text(row: dict) -> str:
     return ""
 
 
+def _render_lexicon_audit() -> None:
+    from filingtext.audit import TOPIC_LABELS, load_audit_summary
+
+    summary = load_audit_summary()
+    st.markdown("**主题种子词的第一轮标注**")
+    if not summary or not summary.get("classes"):
+        st.caption("还没有标注结果。精确率和召回率只在人工标签齐了之后计算。")
+        return
+    rows = []
+    for key, scored in summary["classes"].items():
+        precision = scored.get("precision")
+        recall = scored.get("recall")
+        rows.append(
+            {
+                "词表": TOPIC_LABELS.get(key, scored.get("label") or key),
+                "标注句数": scored.get("n_labeled"),
+                "命中句": scored.get("n_hit"),
+                "精确率": None if precision is None else f"{precision:.1%}",
+                "召回率": None if recall is None else f"{recall:.1%}",
+                "命中且相关": scored.get("tp"),
+                "命中但无关": scored.get("fp"),
+                "未命中但相关": scored.get("fn"),
+            }
+        )
+    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    st.caption(summary.get("note") or "")
+
+
+def _render_section_diagnostics() -> None:
+    path = ROOT / "data" / "validation" / "validation_report.csv"
+    st.markdown("**验收集的章节切分**")
+    if not path.exists():
+        st.caption("没有 validation_report.csv，这里不显示切分成功率。")
+        return
+    from filingtext.diagnostics import section_success_table
+
+    report = pd.read_csv(path)
+    st.dataframe(section_success_table(report), hide_index=True, use_container_width=True)
+    st.caption(
+        "这是白酒、银行、医药各 5 家、2022–2024 年的验收集，按年份和交易所汇总，不是全 A 股。"
+        "「风险已核对缺失」表示年报里没有这一节；「风险没切到」才是标题没有落到。"
+        "全市场要用同一张表的脚本，对更大的解析结果再跑一遍。"
+    )
+
+
 def _render_method(anchors: list[dict], parsed: list[dict]) -> None:
-    st.markdown(f"**词典版本** {DICTIONARY_VERSION}。这是可编辑种子词，不是 Loughran-McDonald 官方全表。")
+    st.markdown(
+        f"**词典版本** {DICTIONARY_VERSION}。"
+        "三类主题仍是可编辑种子词。中文积极和消极词用姚加权、冯绪、王赞钧、纪荣嵘、张维（2021）"
+        "《管理科学学报》的正式用语词表，按整词计入，不含股吧口语词。"
+        "英文语气仍是种子词，不是 Loughran-McDonald 官方全表。"
+    )
+    _render_lexicon_audit()
+    _render_section_diagnostics()
     st.markdown(
         "强度分母是清洗后的内容词数。命中删除规则的页码行和表格行不进入分词、分母和可读性指标。"
-        "中文用 jieba，词典里的词会先加进去。同一词表内长词优先，所以「碳排放权」不会再拆出「碳排放」。"
+        "中文主题词用 jieba，长词优先，所以「碳排放权」不会再拆出「碳排放」。"
+        "语气词按分词后的整词匹配，「风险管理」不会因为含有「风险」就多计一次。"
         "英文按词边界匹配，loss 不会算进 losses。"
         "不同词表可以同时命中同一个词，高亮时只标更长的那一次。"
     )
     st.markdown(
-        "否定只看命中词前面约 4 个汉字，或英文前约 24 个字符里的 no / not / never。"
-        "「没有改善」计为消极，不再计为积极。更远的否定不会被识别。"
+        "否定按分句判断：看命中词所在分句里、该词前面有没有否定。"
+        "逗号会把句子切开，所以前半句的「没有」不会把后半句的「改善」翻成消极。"
+        "顿号不断句。「没有改善」计为消极，不再计为积极。"
     )
     st.markdown(
         "语气净值 = (积极词数 − 消极词数) / 内容词数。大于 0 表示积极词更多。"
-        "风险、不确定不进这个净值。"
+        "正式用语词表把「风险」「亏损」「下降」计为消极。不确定和诉讼仍用种子词，不进这个净值。"
     )
     st.markdown(
         "章节没有切出来时 found 为 0，宽表里对应格子是空的，不能把空值当成强度 0，也不能当成没有风险披露。"
@@ -501,7 +574,11 @@ def _render_method(anchors: list[dict], parsed: list[dict]) -> None:
         "同一公司的风险标题换了，会标 title_shift。这只说明标题变了，不把该年从比较里拿掉。"
         "「法律制裁」「制裁合规」「提升制裁风险防范」这类合规表述不计入地缘词；「经济制裁」「出口管制」仍计入。"
         "正文变长或变短会同时改变分子和分母，每千词升降不一定是同一类话变多。"
-        "跨年漂移是用词分布的差异，模板句、目录残留或篇幅变化都会让它变大，不能直接解读为风险上升或下降。"
+        "跨年相似度有两个数：余弦是词频加权后的方向是否接近，Jaccard 是内容词集合重叠多少。"
+        "披露漂移 = 1 − 余弦。新增句占比是本年句子里对不上上年的比例，风险节和讨论节都算。"
+        "模板句、目录残留或篇幅变化都会让漂移变大，不能直接解读为风险上升或下降。"
+        "语气净值和披露漂移是接到因子工作台的第 9、第 10 个因子：按 available_date 对到月末，做市值和行业中性化，最后 12 个月留作保留样本，并扣除佣金、点差、冲击和借券。"
+        "方向事先写死，不用跑出来的数再改。当月不足 12 只股票，或有效月份不够训练窗时，只报告覆盖，不给收益结论。"
     )
     st.markdown(
         "中文类比可读性：0.4 ×（词数/句数 + 100 × 四字及以上词占比）。"
@@ -511,21 +588,39 @@ def _render_method(anchors: list[dict], parsed: list[dict]) -> None:
         st.write(rule)
     if anchors:
         st.markdown("**章节边界**")
-        st.dataframe(pd.DataFrame(anchors), use_container_width=True, height=240)
+        st.dataframe(
+            pd.DataFrame(anchors).rename(
+                columns={
+                    "section": "章节",
+                    "priority": "优先级",
+                    "title": "标题",
+                    "start": "起始位置",
+                    "content_start": "正文起点",
+                    "header": "标题行",
+                    "toc": "目录",
+                    "hard": "硬边界",
+                    "rank": "层级",
+                    "toc_page": "目录页",
+                    "match_method": "匹配方式",
+                }
+            ),
+            use_container_width=True,
+            height=240,
+        )
     if parsed:
         st.dataframe(
             pd.DataFrame(
                 [
                     {
-                        "section": item["section"],
-                        "found": item["found"],
-                        "page_start": item.get("page_start"),
-                        "page_end": item.get("page_end"),
-                        "n_dropped_lines": item.get("n_dropped_lines"),
-                        "n_tokens": item.get("n_tokens"),
-                        "quality_flags": item.get("quality_flags"),
-                        "section_status": item.get("section_status"),
-                        "comparable": item.get("comparable"),
+                        "章节": item["section"],
+                        "是否切到": item["found"],
+                        "起始页": item.get("page_start"),
+                        "结束页": item.get("page_end"),
+                        "删行数": item.get("n_dropped_lines"),
+                        "内容词数": item.get("n_tokens"),
+                        "质量标记": item.get("quality_flags"),
+                        "章节状态": item.get("section_status"),
+                        "可否比较": item.get("comparable"),
                     }
                     for item in parsed
                 ]
@@ -584,9 +679,46 @@ def _barh(top: pd.DataFrame, font: str | None) -> None:
     plt.close(fig)
 
 
+def _render_job_status() -> None:
+    from filingtext.jobs import latest_job, read_events, read_job
+
+    job_id = st.session_state.get("ws_job")
+    job = None
+    if job_id:
+        try:
+            job = read_job(job_id)
+        except (OSError, ValueError):
+            job = None
+    if job is None:
+        job = latest_job()
+    if not job:
+        return
+    status = {"queued": "排队", "running": "进行中", "done": "完成", "failed": "失败"}.get(job.get("status"), job.get("status"))
+    st.caption(f"最近一次抓取：{status}")
+    if job.get("error"):
+        st.error(str(job["error"]))
+    summary = job.get("summary") or {}
+    if job.get("status") == "done" and summary:
+        st.session_state["ws_message"] = (
+            f"完成：下载 {summary.get('downloaded', 0)} 份，"
+            f"有效章节 {summary.get('n_found')} 个，公司 {summary.get('n_firms')} 家。"
+            "失败的文件可再次提交，已成功的会保留。"
+        )
+    events = read_events(job["id"])
+    if events:
+        st.dataframe(
+            pd.DataFrame(events).rename(columns={"stage": "阶段", "detail": "说明", "state": "状态"}),
+            hide_index=True,
+            use_container_width=True,
+            height=180,
+        )
+    if job.get("status") in {"queued", "running"} and st.button("刷新进度"):
+        st.rerun()
+
+
 def _workspace_page() -> tuple[str, str, str, dict]:
     st.subheader("我的面板")
-    st.caption("代码和年份会下载原文再解析。上传的文件会进入同一张表。样本案例的数字不会被这里改掉。网页单次最多 8 份；更大的样本用 scripts/build_factor_panel.py，导出 panel_factor.dta。")
+    st.caption("代码和年份会放进后台任务再解析。上传的文件会进入同一张表。样本案例的数字不会被这里改掉。任务状态写在本机，刷新页面还能看到。单次网页任务超过 24 份需要确认，超过 200 份改用 scripts/build_factor_panel.py。已下载过的原文按 SHA1 缓存，同一地址不再重复请求。")
     action = st.radio("加入文件", ["按代码和年份抓取", "上传已有文件"], horizontal=True)
     if action == "按代码和年份抓取":
         _fetch_form()
@@ -597,13 +729,20 @@ def _workspace_page() -> tuple[str, str, str, dict]:
 
         reset_workspace()
         st.session_state.pop("ws_message", None)
+        st.session_state.pop("ws_job", None)
         st.rerun()
+    _render_job_status()
     message = st.session_state.get("ws_message")
     if message:
         st.info(message)
     events = st.session_state.get("ws_events") or []
     if events:
-        st.dataframe(pd.DataFrame(events), hide_index=True, use_container_width=True, height=180)
+        st.dataframe(
+            pd.DataFrame(events).rename(columns={"stage": "阶段", "detail": "说明", "state": "状态"}),
+            hide_index=True,
+            use_container_width=True,
+            height=180,
+        )
     return _workspace_selection()
 
 
@@ -619,36 +758,37 @@ def _fetch_form() -> None:
         contact = st.text_input("EDGAR 联系邮箱", placeholder="name@university.edu")
         choice = st.selectbox("表格", ["10-K", "10-Q"])
         forms = [choice]
+    st.checkbox("下载超过 24 份时，我确认这次的数量", key="confirm_large")
     if st.button("抓取并生成面板"):
-        from filingtext.workspace import build_from_codes
+        from filingtext.jobs import create_job, latest_job, spawn
+        from filingtext.workspace import LARGE_BATCH, parse_codes
 
-        events: list[dict] = []
+        chosen = parse_codes(codes)
+        forms_n = 1
+        estimate = len(chosen) * (end - start + 1) * forms_n
+        running = latest_job()
+        if running and running.get("status") in {"queued", "running"}:
+            st.warning("已有抓取任务在跑。等它结束，或点下面的刷新查看进度。")
+            return
+        if estimate > LARGE_BATCH and not st.session_state.get("confirm_large"):
+            st.warning(f"这次大约 {estimate} 份。勾选确认后再提交。")
+            return
         try:
-            with st.status("抓取进度", expanded=True) as box:
-                def _on_event(event: dict) -> None:
-                    events.append(event)
-                    box.write(f"{event['stage']} · {event['detail']} · {event['state']}")
-
-                result = build_from_codes(
-                    "US" if market.startswith("美股") else "CN",
-                    codes,
-                    start,
-                    end,
-                    edgar_contact=contact,
-                    forms=forms,
-                    on_event=_on_event,
-                )
-                box.update(label="完成", state="complete")
-            summary = result["summary"]
-            st.session_state["ws_events"] = events
-            st.session_state["ws_message"] = (
-                f"完成：下载 {len(result.get('downloaded') or [])} 份，"
-                f"有效章节 {summary['n_found']} 个，公司 {summary['n_firms']} 家。"
-                "失败的文件可再次点击抓取，已成功的会保留。"
+            job_id = create_job(
+                {
+                    "market": "US" if market.startswith("美股") else "CN",
+                    "codes": codes,
+                    "start": start,
+                    "end": end,
+                    "forms": forms,
+                    "confirm_large": bool(st.session_state.get("confirm_large")),
+                }
             )
+            spawn(job_id, edgar_contact=contact)
+            st.session_state["ws_job"] = job_id
+            st.session_state["ws_message"] = "抓取已转到后台。进度写在本机，刷新后还在。"
             st.rerun()
         except Exception as exc:
-            st.session_state["ws_events"] = events
             st.error(str(exc))
 
 
@@ -740,7 +880,9 @@ def _render_memory_panel(frame: pd.DataFrame) -> None:
         render_freq_tone_trends(chart_mda)
         if chart_mda["disclosure_drift"].notna().any() and chart_mda["fiscal_year"].nunique() >= 2:
             st.caption("披露漂移")
-            st.line_chart(chart_mda.set_index("fiscal_year")[["disclosure_drift"]])
+            from ui.charts import render_drift_trend
+
+            render_drift_trend(chart_mda)
         if len(chart_mda) < len(mda):
             st.caption("文本过短或边界可疑的年份没有画进图里，避免和正常章节比每千词。")
         if mda["disclosure_drift"].isna().any():
@@ -783,12 +925,10 @@ def _render_panel(out_dir: Path = OUTPUT_DIR, fallback: pd.DataFrame | None = No
     st.dataframe(ready, use_container_width=True, height=240)
     if trend_path.exists():
         trend = pd.read_csv(trend_path)
-        metric = st.selectbox(
-            "时序指标",
-            ["digital_per_k", "esg_per_k", "geopol_per_k", "tone_net", "fog_index", "disclosure_drift"],
-        )
-        chart = trend.pivot(index="fiscal_year", columns="market", values=metric)
-        st.line_chart(chart)
+        from ui.charts import METRIC_LABELS, render_market_trend
+
+        metric = st.selectbox("时序指标", list(METRIC_LABELS), format_func=lambda key: METRIC_LABELS[key])
+        render_market_trend(trend, metric)
     if figure.exists():
         st.image(str(figure), caption="样本均值的时序")
 
@@ -818,6 +958,7 @@ def _download_row(out_dir: Path) -> None:
             data = path.read_bytes()
             mime = "application/octet-stream"
         column.download_button(label, data, file_name=name, mime=mime, key=f"dl-{out_dir.name}-{name}")
+    st.caption("因子表也可以用本机只读接口取出：`python -m filingtext.panel_api --root` 指向这个输出目录。接口只提供因子表、回归对照和检验摘要，不提供章节正文。当前这台 Streamlit 没有单独的 agent 开关。")
     _download_evidence_zip(out_dir)
 
 

@@ -19,7 +19,9 @@ METRIC_COLUMNS = [
     "digital_tfidf",
     "geopol_tfidf",
     "yoy_similarity",
+    "yoy_jaccard",
     "disclosure_drift",
+    "new_sentence_share",
 ]
 
 
@@ -84,7 +86,9 @@ WIDE_VALUE_COLUMNS = [
     "digital_tfidf",
     "geopol_tfidf",
     "yoy_similarity",
+    "yoy_jaccard",
     "disclosure_drift",
+    "new_sentence_share",
 ]
 
 FACTOR_COLUMNS = [
@@ -110,6 +114,10 @@ FACTOR_COLUMNS = [
     "mda_esg_per_k",
     "mda_geopol_per_k",
     "mda_tone_net",
+    "mda_yoy_similarity",
+    "mda_yoy_jaccard",
+    "mda_disclosure_drift",
+    "mda_new_sentence_share",
     "risk_found",
     "risk_comparable",
     "risk_n_tokens",
@@ -117,6 +125,7 @@ FACTOR_COLUMNS = [
     "risk_esg_per_k",
     "risk_geopol_per_k",
     "risk_tone_net",
+    "risk_new_sentence_share",
 ]
 
 
@@ -379,6 +388,21 @@ def _to_stata(frame: pd.DataFrame, path: Path) -> None:
     for column in out.columns:
         if pd.api.types.is_integer_dtype(out[column]):
             out[column] = out[column].astype("int32")
+        elif out[column].dtype == object and column not in {
+            "stkcd",
+            "ticker",
+            "cik",
+            "firm_name",
+            "market",
+            "available_date",
+            "source_url",
+            "source_sha1",
+            "dictionary_version",
+            "app_version",
+        }:
+            converted = pd.to_numeric(out[column], errors="coerce")
+            if int(converted.notna().sum()) == int(out[column].notna().sum()):
+                out[column] = converted
     out.to_stata(path, write_index=False, version=118)
 
 
@@ -432,7 +456,7 @@ def plot_trends(frame: pd.DataFrame, path: str | Path) -> None:
         ("esg_per_k", "ESG / 绿色转型（每千词）"),
         ("digital_per_k", "数智化 / AI（每千词）"),
         ("tone_net", "语气净值"),
-        ("disclosure_drift", "披露漂移 1-相似度"),
+        ("disclosure_drift", "披露漂移 1−余弦"),
     ]
     if found.empty:
         for axis, (_col, title) in zip(axes.ravel(), specs):
@@ -443,6 +467,9 @@ def plot_trends(frame: pd.DataFrame, path: str | Path) -> None:
             for market, sub in found.groupby("market"):
                 series = sub.groupby("fiscal_year")[col].mean()
                 axis.plot(series.index, series.values, marker="o", label=str(market))
+            years = sorted(int(year) for year in found["fiscal_year"].dropna().unique())
+            axis.set_xticks(years)
+            axis.set_xticklabels([str(year) for year in years])
             axis.set_title(title)
             axis.set_xlabel("会计年度")
             axis.legend(frameon=False)

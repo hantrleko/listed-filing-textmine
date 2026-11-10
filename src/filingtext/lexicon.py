@@ -11,7 +11,7 @@ from filingtext.config import LEXICON_DIR
 
 log = logging.getLogger(__name__)
 
-DICTIONARY_VERSION = "seed-2026-11.0"
+DICTIONARY_VERSION = "topics-seed-2026-11+yao2021-formal"
 
 TOPIC_NAMES = ("esg", "digital", "geopol")
 TONE_NAMES = ("pos", "neg", "unc", "lit")
@@ -52,12 +52,27 @@ def topic_lexicons() -> dict[str, dict[str, list[str]]]:
     return data
 
 
+def formal_tone_available() -> bool:
+    return (LEXICON_DIR / "yao2021_formal_pos.txt").exists() and (LEXICON_DIR / "yao2021_formal_neg.txt").exists()
+
+
 @lru_cache(maxsize=1)
 def tone_lexicons() -> dict[str, dict[str, list[str]]]:
+    """中文积极/消极词用姚加权等（2021）正式用语词表。不确定和诉讼仍是种子词。
+
+    正式词表只用于年报语调。社交媒体词表不读入。英文语气仍是种子词，可用 Loughran-McDonald 覆盖。
+    """
     data: dict[str, dict[str, list[str]]] = {"zh": {}, "en": {}}
     for name in TONE_NAMES:
         data["zh"][name] = load_term_file(LEXICON_DIR / f"tone_{name}_zh.txt", lower=False)
         data["en"][name] = load_term_file(LEXICON_DIR / f"tone_{name}_en.txt", lower=True)
+    if formal_tone_available():
+        data["zh"]["pos"] = load_term_file(LEXICON_DIR / "yao2021_formal_pos.txt", lower=False)
+        data["zh"]["neg"] = load_term_file(LEXICON_DIR / "yao2021_formal_neg.txt", lower=False)
+        covered = set(data["zh"]["pos"]) | set(data["zh"]["neg"])
+        data["zh"]["pos"] = [term for term in data["zh"]["pos"] if term not in set(data["zh"]["neg"])]
+        for name in ("unc", "lit"):
+            data["zh"][name] = [term for term in data["zh"][name] if term not in covered]
     return data
 
 
@@ -117,7 +132,8 @@ def register_jieba(extra: list[str] | None = None) -> None:
     terms = list(extra or [])
     zh = topic_lexicons()["zh"]
     tone = tone_lexicons()["zh"]
-    for group in list(zh.values()) + list(tone.values()):
+    # 正式用语词表有几千条，不塞进分词器，避免把「风险管理」切成「风险」。
+    for group in list(zh.values()) + [tone.get("unc", []), tone.get("lit", [])]:
         terms.extend(group)
     for term in terms:
         if re.search(r"[\u4e00-\u9fff]", term) and len(term) >= 2:

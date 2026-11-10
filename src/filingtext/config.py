@@ -100,7 +100,9 @@ PANEL_COLUMNS = [
     "geopol_per_char_k",
     "geopol_tfidf",
     "yoy_similarity",
+    "yoy_jaccard",
     "disclosure_drift",
+    "new_sentence_share",
     "error",
 ]
 

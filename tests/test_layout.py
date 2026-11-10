@@ -103,3 +103,41 @@ def test_moutai_2023_keeps_brand_sentence_and_bounds_risk():
     assert risk["comparable"] == 0
     assert "short_text" in risk["quality_flags"]
     assert "location_missing" not in (risk["quality_flags"] or "")
+
+
+def test_table_caption_and_page_pointer_leave_the_denominator():
+    raw = (
+        "[[PAGE:14]]\n"
+        "(2). 产销量情况分析表\n"
+        "详见本报告第14页。\n"
+        "公司营业收入保持增长，盈利能力稳健，详见本报告第14页。\n"
+        "以501亿美元的品牌价值位列《Brand Finance 2024年全球品牌价值500强》第24位，以884.27\n"
+    )
+    cleaned, drops, _meta = clean_body_report(raw)
+    assert "(2). 产销量情况分析表" not in cleaned
+    assert "详见本报告第14页" not in cleaned
+    assert "公司营业收入保持增长，盈利能力稳健。" in cleaned
+    assert "501亿美元" in cleaned
+    assert any(item["reason"] == "表题" for item in drops)
+    assert any(item["reason"] == "引用句" for item in drops)
+    assert noise_reason("公司营业收入保持增长，盈利能力稳健。") is None
+
+
+def test_bank_demo_is_long_and_talks_about_banking():
+    from filingtext.samples import SAMPLE_DOCS
+
+    bank = next(doc for doc in SAMPLE_DOCS if doc["filename"] == "000001_2023_annual.txt")
+    assert "工业互联网" not in bank["text"]
+    assert "质检" not in bank["text"]
+    assert "贷款" in bank["text"]
+    rows = parse_text(
+        bank["text"],
+        {"path": bank["filename"], "market": "CN", "ticker": "000001", "fiscal_year": 2023, "sections": ["mda"]},
+    )
+    mda = rows[0]
+    assert mda["found"] == 1
+    assert mda["n_tokens"] >= 800
+    assert mda["esg_per_k"] is not None
+    assert mda["esg_per_k"] < 30
+    assert "本段不应进入管理层讨论" not in mda["section_text"]
+    assert "该句应仍留在管理层讨论中" in mda["section_text"]

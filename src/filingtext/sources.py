@@ -186,14 +186,13 @@ def download_cninfo(
             role = filing_role_from_title(title)
             suffix = "_restated" if role == "restated" else ""
             dest = out / f"{code}_{year}_annual{suffix}.pdf"
-            if role == "initial" and dest.exists():
-                _emit(on_event, "下载", f"{dest.name} 已有首次披露，跳过", "ok")
-                continue
-            _emit(on_event, "下载", dest.name)
+            url = cninfo_pdf_url(adjunct)
             try:
-                _stream(session, cninfo_pdf_url(adjunct), dest)
+                state = _acquire(session, url, dest, on_event)
             except Exception as exc:
                 _emit(on_event, "下载", f"{dest.name}：{exc}", "fail")
+                continue
+            if state == "exists":
                 continue
             saved.append(dest)
             _emit(on_event, "下载", dest.name, "ok")
@@ -283,11 +282,12 @@ def download_edgar(
             label = ticker or cik
             kind = form.replace("-", "").replace("/", "")
             dest = out / f"{label}_{year}_{kind}{ext}"
-            _emit(on_event, "下载", dest.name)
             try:
-                _stream(session, file_url, dest)
+                state = _acquire(session, file_url, dest, on_event)
             except Exception as exc:
                 _emit(on_event, "下载", f"{dest.name}：{exc}", "fail")
+                continue
+            if state == "exists":
                 continue
             saved.append(dest)
             _emit(on_event, "下载", dest.name, "ok")
@@ -355,6 +355,22 @@ def _year_from_ms(value: object) -> int | None:
         return datetime.fromtimestamp(int(value) / 1000, tz=timezone.utc).year
     except (TypeError, ValueError, OSError):
         return None
+
+
+def _acquire(session: requests.Session, url: str, dest: Path, on_event=None) -> str:
+    from filingtext.originals import remember_original, restore_original
+
+    if dest.exists() and dest.stat().st_size > 0:
+        remember_original(dest, url)
+        _emit(on_event, "下载", f"{dest.name} 已在本地，并写入原文缓存", "ok")
+        return "exists"
+    if restore_original(url, dest):
+        _emit(on_event, "下载", f"{dest.name} 命中原文缓存", "ok")
+        return "cached"
+    _emit(on_event, "下载", dest.name)
+    _stream(session, url, dest)
+    remember_original(dest, url)
+    return "downloaded"
 
 
 def _stream(session: requests.Session, url: str, dest: Path) -> None:

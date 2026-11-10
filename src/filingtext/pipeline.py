@@ -131,10 +131,10 @@ def run(
     if use_finbert:
         _attach_finbert(records)
     emit("清洗落盘", "正文、原文与删除日志", "run")
-    _persist_text(records, Path(text_dir) if text_dir else TEXT_DIR)
     apply_yoy_quality(records)
     apply_title_shift(records)
     apply_corpus(records)
+    _persist_text(records, Path(text_dir) if text_dir else TEXT_DIR)
     frame = to_frame(records)
     emit("导出", "parquet / dta / duckdb / 因子表", "run")
     paths = export_panel(frame, output_dir)

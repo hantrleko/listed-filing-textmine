@@ -18,6 +18,8 @@ def test_panel_roundtrip(tmp_path: Path):
     assert bank.loc[bank["fiscal_year"] == 2023, "digital_count"].iloc[0] > bank.loc[bank["fiscal_year"] == 2022, "digital_count"].iloc[0]
     assert bank.loc[bank["fiscal_year"] == 2023, "yoy_similarity"].notna().all()
     assert bank.loc[bank["fiscal_year"] == 2024, "disclosure_drift"].iloc[0] > 0
+    assert bank.loc[bank["fiscal_year"] == 2023, "yoy_jaccard"].notna().all()
+    assert bank.loc[bank["fiscal_year"] == 2023, "new_sentence_share"].notna().all()
     us = frame[(frame["ticker"] == "NWND") & (frame["section"] == "mda")]
     assert len(us) == 2
     assert us["tone_method"].str.contains("seed").all()
@@ -25,6 +27,8 @@ def test_panel_roundtrip(tmp_path: Path):
     assert paths["factor_dta"].exists()
     factor = pd.read_stata(paths["factor_dta"], convert_categoricals=False)
     assert {"ticker", "fiscal_year", "fiscal_quarter", "available_date", "pit_ready"} <= set(factor.columns)
+    assert {"mda_yoy_jaccard", "mda_new_sentence_share", "risk_new_sentence_share"} <= set(factor.columns)
+    assert all(len(name) <= 32 for name in factor.columns)
     assert any(str(value) == "000001" for value in factor["ticker"])
     assert paths["figure"].exists()
     loaded = pd.read_stata(paths["dta"])

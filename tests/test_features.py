@@ -151,7 +151,28 @@ def test_negation_flips_positive_word():
     plain = score_document("公司实现改善，盈利能力稳健。", "CN")
     negated = score_document("公司没有改善，盈利能力稳健。", "CN")
     assert plain["tone_net"] > negated["tone_net"]
-    assert negated["tone_method"].endswith("+negation")
+    assert negated["tone_method"].endswith("+clause_negation")
+
+
+def test_clause_negation_stops_at_the_comma():
+    crossed = score_document("公司没有扩张，盈利实现改善。", "CN")
+    local = score_document("公司并未实现改善。", "CN")
+    plain = score_document("盈利实现改善。", "CN")
+    assert plain["tone_net"] > local["tone_net"]
+    assert crossed["tone_net"] > local["tone_net"]
+
+
+def test_distant_topic_negation_is_still_inside_the_clause():
+    assert score_document("公司不存在较大的出口管制影响。", "CN")["geopol_count"] == 0
+    assert score_document("不良贷款上升，绿色信贷继续投放。", "CN")["esg_count"] >= 1
+
+
+def test_formal_tone_counts_risk_but_not_risk_management():
+    managed = score_document("董事会风险管理委员会听取了本季度的报告。", "CN")
+    exposed = score_document("公司面临的风险上升，并且出现亏损。", "CN")
+    assert managed["tone_method"].startswith("yao2021_formal")
+    assert managed["tone_neg"] == 0
+    assert exposed["tone_net"] < 0
 
 
 def test_yoy_similarity_and_drift():
@@ -168,6 +189,7 @@ def test_yoy_similarity_and_drift():
                 "section": "mda",
                 "fiscal_year": year,
                 "n_chars": scored["n_chars"],
+                "section_text": text,
                 **scored,
             }
         )
@@ -177,4 +199,8 @@ def test_yoy_similarity_and_drift():
     assert by_year[2023]["yoy_similarity"] > 0.99
     assert by_year[2023]["disclosure_drift"] < 0.01
     assert by_year[2024]["disclosure_drift"] > by_year[2023]["disclosure_drift"]
+    assert by_year[2023]["yoy_jaccard"] > 0.99
+    assert by_year[2024]["yoy_jaccard"] < by_year[2023]["yoy_jaccard"]
+    assert by_year[2023]["new_sentence_share"] == 0
+    assert by_year[2024]["new_sentence_share"] > 0
     assert "token_counts" not in rows[0]
